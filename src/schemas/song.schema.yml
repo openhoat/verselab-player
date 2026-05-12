@@ -1,0 +1,80 @@
+$schema: 'http://json-schema.org/draft-07/schema#'
+$id: 'song.schema.yml'
+title: 'Verselab Song'
+description: 'Song arrangement for Roland Verselab MV-1 — references section files and defines the arrangement'
+type: object
+required: [meta, arrangement]
+additionalProperties: false
+properties:
+  tracks:
+    type: object
+    description: 'Track activation state — true = play, false = mute. Keys match track filenames (e.g. drums, bass, keys, pad)'
+    additionalProperties:
+      type: boolean
+    default: {}
+  meta:
+    type: object
+    required: [title, bpm]
+    additionalProperties: false
+    properties:
+      title:
+        type: string
+        description: 'Song title'
+      artist:
+        type: string
+        description: 'Original artist or composer'
+      bpm:
+        type: number
+        minimum: 40
+        maximum: 300
+        description: 'Tempo in beats per minute (applies to all sequences)'
+  sections:
+    type: object
+    description: 'Inline section definitions (legacy — prefer sections/ directory with individual files)'
+    propertyNames:
+      pattern: '^([1-9]|1[0-6])$'
+    additionalProperties:
+      type: object
+      required: [sequence]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          description: 'Optional display name for this section'
+        sequence:
+          description: 'Sequence reference — string path or integer number'
+          oneOf:
+            - type: string
+              description: 'Sequence filename without .yml extension (relative to this song directory)'
+            - type: integer
+              minimum: 1
+              maximum: 16
+              description: 'Sequence number — resolves to sequences/{n}/ directory'
+        section:
+          type: integer
+          minimum: 1
+          maximum: 16
+          description: 'MV-1 section number (1-16)'
+        repeat:
+          type: integer
+          minimum: 1
+          default: 1
+          description: 'Number of times to repeat this section (default: 1)'
+  arrangement:
+    description: 'Ordered list of section names to play — references sections/ filenames or inline section keys'
+    oneOf:
+      - type: array
+        minItems: 1
+        items:
+          type: string
+          description: 'Section name (filename without .yml from sections/ dir, or key from inline sections)'
+      - type: array
+        minItems: 1
+        items:
+          oneOf:
+            - type: integer
+              minimum: 1
+              maximum: 16
+              description: 'Section number (legacy numeric key from inline sections)'
+            - type: string
+              description: 'Section name'

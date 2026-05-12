@@ -1,0 +1,50 @@
+{
+  "name": "verselab-player",
+  "version": "1.0.0",
+  "description": "Real-time MIDI sequencer for Roland Verselab MV-1",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/player.ts",
+    "start": "node dist/player.js",
+    "test": "vitest --run",
+    "test:e2e": "vitest --config vitest.e2e.config.ts tests/e2e --run",
+    "clean": "rm -rf dist",
+    "validate": "npm run build && npm run test && npm run lint:verselab -- songs",
+    "lint:verselab": "tsx src/cli/lint.ts",
+    "record": "tsx src/record.ts",
+    "scan": "tsx src/scan.ts",
+    "sounds": "tsx src/cli/sounds.ts"
+  },
+  "keywords": [
+    "midi",
+    "verselab",
+    "roland",
+    "sequencer",
+    "music"
+  ],
+  "author": "Olivier Penhoat <openhoat@gmail.com> (http://headwood.net/)",
+  "license": "ISC",
+  "dependencies": {
+    "@midival/core": "0.2.0",
+    "@midival/node": "0.2.0",
+    "@types/js-yaml": "4.0.9",
+    "@types/midi": "2.0.4",
+    "chalk": "5.6.2",
+    "dotenv": "^16.4.5",
+    "js-yaml": "4.1.1",
+    "midi": "2.0.0",
+    "ora": "9.4.0",
+    "terminal-kit": "3.1.2",
+    "ts-node": "10.9.2",
+    "yaml": "^2.5.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.19",
+    "json-schema-to-typescript": "15.0.4",
+    "tsx": "^4.19.2",
+    "typescript": "5.9.3",
+    "vitest": "^2.1.8"
+  }
+}

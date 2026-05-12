@@ -1,0 +1,127 @@
+$schema: 'http://json-schema.org/draft-07/schema#'
+$id: 'sequence.schema.yml'
+title: 'Verselab Sequence'
+description: 'A MIDI sequence playable on Roland Verselab MV-1 (legacy single-file format)'
+type: object
+required: []
+properties:
+  meta:
+    type: object
+    required: [title, bpm]
+    additionalProperties: false
+    properties:
+      title:
+        type: string
+        description: 'Sequence title'
+      bpm:
+        type: number
+        minimum: 40
+        maximum: 300
+        description: 'Tempo in beats per minute'
+      steps:
+        type: integer
+        minimum: 1
+        maximum: 128
+        description: 'Sequence length in steps (default: auto-detected from note positions)'
+  aliases:
+    type: object
+    description: 'Named chord aliases — each value is an array of note names or MIDI numbers'
+    additionalProperties:
+      type: array
+      minItems: 1
+      items:
+        oneOf:
+          - type: string
+            pattern: '^[A-Ga-g][#b]?-?[0-9]+$'
+            examples: [C3, Eb3, G3]
+          - type: integer
+            minimum: 0
+            maximum: 127
+additionalProperties:
+  oneOf:
+    - title: 'Drum track'
+      description: 'Each key (except channel/sound/category) is an instrument name mapped to a step pattern'
+      type: object
+      required: [channel]
+      properties:
+        channel:
+          type: integer
+          minimum: 1
+          maximum: 7
+          description: 'MIDI channel (1-indexed, as displayed on the MV-1) — defaults: 1=KICK, 2=SNARE, 3=HI-HAT, 4=KIT'
+        sound:
+          type: string
+          description: 'Sound/preset name loaded on this track (informational only, not sent via MIDI)'
+        category:
+          type: string
+          description: 'Sound category as shown in the MV-1 sound list (e.g. E.Bass, E.Piano1, Drum Kit)'
+        steps:
+          type: integer
+          minimum: 1
+          maximum: 128
+          description: 'Override loop length in steps (default: auto-detected from pattern length)'
+      additionalProperties:
+        type: string
+        description: 'Step pattern (1-128 steps) — x = hit, . = rest, spaces optional. Known names: kick, snare, hihat, open_hihat, rimshot, clap, crash, ride, low_tom, mid_tom, high_tom'
+    - title: 'Melodic track'
+      type: object
+      required: [channel, notes]
+      additionalProperties: false
+      properties:
+        channel:
+          type: integer
+          minimum: 1
+          maximum: 7
+          description: 'MIDI channel (1-indexed, as displayed on the MV-1) — defaults: 5=BASS, 6=INST1, 7=INST2'
+        sound:
+          type: string
+          description: 'Sound/preset name loaded on this track (informational only, not sent via MIDI)'
+        category:
+          type: string
+          description: 'Sound category as shown in the MV-1 sound list (e.g. E.Bass, E.Piano1, Drum Kit)'
+        steps:
+          type: integer
+          minimum: 1
+          maximum: 128
+          description: 'Override loop length in steps (default: auto-detected from note positions)'
+        transpose:
+          type: integer
+          minimum: -127
+          maximum: 127
+          description: 'Semitone offset applied to all notes on this track (e.g. 12 = +1 octave, -12 = -1 octave)'
+        notes:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [step, vel]
+            oneOf:
+              - required: [note]
+              - required: [chord]
+            properties:
+              step:
+                type: integer
+                minimum: 1
+                maximum: 128
+                description: 'Step position (1-128, 1-indexed as on the MV-1 sequencer)'
+              note:
+                description: 'Note name (C2, G#3, Bb4...) or MIDI number (0-127)'
+                oneOf:
+                  - type: string
+                    pattern: '^[A-Ga-g][#b]?-?[0-9]+$'
+                    examples: [C2, G2, D#3, Bb4]
+                  - type: integer
+                    minimum: 0
+                    maximum: 127
+              chord:
+                type: string
+                description: 'Chord alias name defined in the top-level aliases section'
+              vel:
+                type: integer
+                minimum: 1
+                maximum: 127
+                description: 'Velocity'
+              dur:
+                type: number
+                minimum: 0.1
+                description: 'Duration in steps (default 1)'

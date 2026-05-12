@@ -1,0 +1,100 @@
+$schema: 'http://json-schema.org/draft-07/schema#'
+$id: 'track.schema.yml'
+title: 'Verselab Track'
+description: 'Single track file for Roland Verselab MV-1 — filename defines the track name, track number can be specified via track property or filename prefix (e.g. 4-drums.yml)'
+oneOf:
+  - title: 'Drum track'
+    description: 'Drum pattern — each key beyond sound/category/steps/track is an instrument name mapped to a step pattern'
+    type: object
+    required: []
+    properties:
+      track:
+        type: integer
+        minimum: 1
+        maximum: 16
+        description: 'MV-1 channel number (1-16) — derived from filename prefix (e.g. 4-drums.yml → track 4) if not specified'
+      clip:
+        type: integer
+        minimum: 1
+        maximum: 16
+        description: 'MV-1 clip number (1-16) — sent as Program Change (clip 1 = PC 0) to switch sections on the MV-1'
+      sound:
+        type: string
+        description: 'Sound/preset name loaded on this track (informational only, not sent via MIDI)'
+      category:
+        type: string
+        description: 'Sound category as shown in the MV-1 sound list (e.g. Drum Kit)'
+      steps:
+        type: integer
+        minimum: 1
+        maximum: 128
+        description: 'Override loop length in steps (default: auto-detected from pattern length)'
+    additionalProperties:
+      type: string
+      description: 'Step pattern (1-128 steps) — x = hit, . = rest, spaces optional. Known names: kick, snare, hihat, open_hihat, rimshot, clap, crash, ride, low_tom, mid_tom, high_tom'
+  - title: 'Melodic track'
+    type: object
+    required: [notes]
+    additionalProperties: false
+    properties:
+      track:
+        type: integer
+        minimum: 1
+        maximum: 16
+        description: 'MV-1 channel number (1-16) — derived from filename prefix (e.g. 5-bass.yml → track 5) if not specified'
+      clip:
+        type: integer
+        minimum: 1
+        maximum: 16
+        description: 'MV-1 clip number (1-16) — sent as Program Change (clip 1 = PC 0) to switch sections on the MV-1'
+      sound:
+        type: string
+        description: 'Sound/preset name loaded on this track (informational only, not sent via MIDI)'
+      category:
+        type: string
+        description: 'Sound category as shown in the MV-1 sound list (e.g. E.Bass, E.Piano1)'
+      steps:
+        type: integer
+        minimum: 1
+        maximum: 128
+        description: 'Override loop length in steps (default: auto-detected from note positions)'
+      transpose:
+        type: integer
+        minimum: -127
+        maximum: 127
+        description: 'Semitone offset applied to all notes on this track (e.g. 12 = +1 octave)'
+      notes:
+        type: array
+        items:
+          type: object
+          additionalProperties: false
+          required: [step, vel]
+          oneOf:
+            - required: [note]
+            - required: [chord]
+          properties:
+            step:
+              type: integer
+              minimum: 1
+              maximum: 128
+              description: 'Step position (1-indexed as on the MV-1 sequencer)'
+            note:
+              description: 'Note name (C2, G#3, Bb4...) or MIDI number (0-127)'
+              oneOf:
+                - type: string
+                  pattern: '^[A-Ga-g][#b]?-?[0-9]+$'
+                - type: integer
+                  minimum: 0
+                  maximum: 127
+            chord:
+              type: string
+              description: 'Chord alias name defined in the sequence-level chords.yml'
+            vel:
+              type: integer
+              minimum: 1
+              maximum: 127
+              description: 'Velocity'
+            dur:
+              type: number
+              minimum: 0.1
+              description: 'Duration in steps (default 1)'

@@ -1,0 +1,30 @@
+$schema: 'http://json-schema.org/draft-07/schema#'
+$id: 'section.schema.yml'
+title: 'Verselab Section'
+description: 'Section definition for a Roland Verselab MV-1 song — one per section file in the sections/ directory'
+type: object
+required: [sequence]
+additionalProperties: false
+properties:
+  name:
+    type: string
+    description: 'Display name for this section (e.g. Verse, Chorus, Bridge)'
+  sequence:
+    description: 'Sequence reference — integer number resolves to sequences/{n}/ directory'
+    oneOf:
+      - type: string
+        description: 'Sequence filename without .yml extension (relative to song directory)'
+      - type: integer
+        minimum: 1
+        maximum: 16
+        description: 'Sequence number — resolves to sequences/{n}/ directory'
+  section:
+    type: integer
+    minimum: 1
+    maximum: 16
+    description: 'MV-1 section number (1-16) — derived from filename prefix (e.g. 1-intro.yml → section 1) if not specified'
+  repeat:
+    type: integer
+    minimum: 1
+    default: 1
+    description: 'Number of times to repeat this section (default: 1)'
