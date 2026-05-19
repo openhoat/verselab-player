@@ -25,7 +25,7 @@
     "music"
   ],
   "author": "Olivier Penhoat <openhoat@gmail.com> (http://headwood.net/)",
-  "license": "ISC",
+  "license": "MIT",
   "dependencies": {
     "@midival/core": "0.2.0",
     "@midival/node": "0.2.0",
