@@ -66,9 +66,27 @@ export function renderStepGrid(track: Track, displayInfo: DisplayInfo, gridWidth
   return `${chalk.dim('│')}${groups.join(chalk.dim(STEP_BEAT_SEP))}${chalk.dim('│')}`
 }
 
-export function renderTrackLabel(track: Track, control: Int32Array, displayInfo: DisplayInfo | null, gridWidth: number): string {
-  const muted = (Atomics.load(control, 1) & (1 << track.channel)) !== 0
-  const dot = muted ? chalk.red('✕') : chalk.green('●')
+export interface TrackDisplayCtx {
+  muteKey?: string
+  soloActive: boolean
+  soloChannel: number
+  preSoloMutes: number
+}
+
+type MuteType = 'active' | 'muted' | 'solo-off'
+
+function getMuteType(track: Track, control: Int32Array, ctx: TrackDisplayCtx): MuteType {
+  const isMuted = (Atomics.load(control, 1) & (1 << track.channel)) !== 0
+  if (!isMuted) return 'active'
+  if (ctx.soloActive && !(ctx.preSoloMutes & (1 << track.channel))) return 'solo-off'
+  return 'muted'
+}
+
+export function renderTrackLabel(track: Track, control: Int32Array, displayInfo: DisplayInfo | null, gridWidth: number, ctx: TrackDisplayCtx): string {
+  const muteType = getMuteType(track, control, ctx)
+  const dot = muteType === 'active' ? chalk.green('●')
+    : muteType === 'solo-off' ? chalk.dim('◎')
+    : chalk.red('✕')
 
   const chRaw = `ch${track.channel}`
   const chPad = ' '.repeat(Math.max(0, 4 - chRaw.length))
@@ -76,17 +94,20 @@ export function renderTrackLabel(track: Track, control: Int32Array, displayInfo:
 
   const nameRaw = track.name.length > 10 ? track.name.slice(0, 9) + '…' : track.name
   const namePad = ' '.repeat(Math.max(0, 10 - nameRaw.length))
-  const name = (muted ? chalk.dim(nameRaw) : nameRaw) + namePad
+  const name = (muteType !== 'active' ? chalk.dim(nameRaw) : nameRaw) + namePad
 
-  const keyRaw = `[${track.channel}]`
+  const keyRaw = ctx.muteKey ? `[${ctx.muteKey}]` : `[${track.channel}]`
   const keyPad = ' '.repeat(Math.max(0, 4 - keyRaw.length))
   const key = chalk.dim(keyRaw) + keyPad
+
+  const clipRaw = `#${track.clip}`
+  const clipPad = ' '.repeat(Math.max(0, 3 - clipRaw.length))
+  const clip = chalk.dim(clipRaw) + clipPad
 
   const stepsRaw = `${track.steps}st`
   const stepsPad = ' '.repeat(Math.max(0, 5 - stepsRaw.length))
   const steps = stepsPad + chalk.dim(stepsRaw)
 
-  // Compute page info based on gridWidth (same logic as renderStepGrid)
   const avail = gridWidth - 2
   const numGroups = Math.max(2, Math.min(8, Math.floor((avail + 1) / 5)))
   const stepsPerPage = numGroups * 4
@@ -99,16 +120,15 @@ export function renderTrackLabel(track: Track, control: Int32Array, displayInfo:
     page = total > 1 ? chalk.dim(` pg ${pg}/${total}`) : ''
   }
 
-  return `  ${dot} ${ch}  ${name} ${key}  ${steps}${page}`
+  return `  ${dot} ${ch}  ${name} ${key} ${clip}  ${steps}${page}`
 }
 
 // ── Transport / Position ──
 
 export function renderTransport(info: DisplayInfo): string {
-  const bar = Math.floor(info.totalStep / 16) + 1
-  const beat = Math.floor((info.totalStep % 16) / 4) + 1
   const repStr = info.totalReps > 1 ? chalk.dim(` ×${info.rep}/${info.totalReps}`) : ''
-  return `  ${chalk.green('▶')}  ${chalk.bold(info.section)}${repStr}`
+  const nextStr = info.nextSection ? chalk.dim(`  → ${info.nextSection}`) : ''
+  return `  ${chalk.green('▶')}  ${chalk.bold(info.section)}${repStr}${nextStr}`
 }
 
 export function renderPosition(info: DisplayInfo, width: number): string {
@@ -138,12 +158,16 @@ const VU_WIDTH = 12
 export function renderVUMeter(track: Track, level: number, control: Int32Array): string {
   const muted = (Atomics.load(control, 1) & (1 << track.channel)) !== 0
   const filled = muted ? 0 : Math.round(level * VU_WIDTH)
-  const bar = `${'▓'.repeat(filled)}${'░'.repeat(VU_WIDTH - filled)}`
-  // Pad name to 10 chars for alignment (same as label name column)
+  const filledStr = '▓'.repeat(filled)
+  const emptyStr = chalk.dim('░'.repeat(VU_WIDTH - filled))
+  const coloredFill = muted ? chalk.dim(filledStr)
+    : level > 0.8 ? chalk.red(filledStr)
+    : level > 0.5 ? chalk.yellow(filledStr)
+    : chalk.green(filledStr)
   const nameRaw = track.name.length > 10 ? track.name.slice(0, 9) + '…' : track.name
   const namePad = ' '.repeat(Math.max(0, 10 - nameRaw.length))
   const name = chalk.dim(nameRaw) + namePad
-  return `  ${muted ? chalk.dim(bar) : bar}  ${name}`
+  return `  ${coloredFill}${emptyStr}  ${name}`
 }
 
 // ── Header ──

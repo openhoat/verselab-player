@@ -10,6 +10,7 @@ export interface DisplayInfo {
   globalSteps: number
   totalStep: number
   totalBars: number
+  nextSection?: string
 }
 
 export interface ScheduledEvent {

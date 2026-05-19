@@ -443,9 +443,14 @@ export function buildSchedule(
       }
     }
 
+    let nextSection: string | undefined
+    for (let j = si + 1; j < totalSteps; j++) {
+      if (playbackSteps[j].section !== section) { nextSection = playbackSteps[j].section.name; break }
+    }
+
     events.push({
       timeMs: t,
-      display: { section: section.name, rep, totalReps: section.repeat, step: step - 1, globalSteps, totalStep: si, totalBars }
+      display: { section: section.name, rep, totalReps: section.repeat, step: step - 1, globalSteps, totalStep: si, totalBars, nextSection }
     })
 
     for (const track of section.tracks) {

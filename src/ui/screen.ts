@@ -4,7 +4,7 @@ import {
   renderStepGrid, renderTrackLabel, renderTransport, renderPosition,
   renderBPM, renderVUMeter, renderTitle, renderConnection,
   renderFrameTop, renderFrameHeaderSep, renderFrameFooterSep, renderFrameBottom,
-  renderKeyHints,
+  renderKeyHints, type TrackDisplayCtx,
 } from './render.js'
 import type { DisplayInfo } from '../clock-worker.js'
 import type { Track } from '../player.js'
@@ -40,6 +40,9 @@ function padRight(s: string, width: number): string {
 const KB = loadKeybindings()
 const muteKeys = buildMuteMap(KB)
 const soloKeys = buildSoloMap(KB)
+const muteKeyForChannel = new Map<number, string>(
+  KB.mute.map((k, i) => [i + 1, k] as [number, string])
+)
 
 export class PlayerScreen {
   private layout!: Layout
@@ -64,6 +67,9 @@ export class PlayerScreen {
   private bpm = 80
   private portName = ''
   private stopHint = ''
+  private soloActive = false
+  private soloChannel = 0
+  private preSoloMutes = 0
 
   init(tracks: Track[], control: Int32Array) {
     this.tracks = tracks
@@ -244,13 +250,22 @@ export class PlayerScreen {
     this.writeFullRow(headerRow, left, right)
   }
 
+  private trackCtx(track: Track): TrackDisplayCtx {
+    return {
+      muteKey: muteKeyForChannel.get(track.channel),
+      soloActive: this.soloActive,
+      soloChannel: this.soloChannel,
+      preSoloMutes: this.preSoloMutes,
+    }
+  }
+
   private drawAllTracks() {
     const gw = this.layout.leftWidth - 2
     for (let i = 0; i < this.tracks.length; i++) {
       const labelRow = this.layout.trackStartRow + i * 3
       const gridRow = labelRow + 1
       const track = this.tracks[i]
-      this.writeAt(labelRow, 2, renderTrackLabel(track, this.control, this.displayInfo, gw), gw)
+      this.writeAt(labelRow, 2, renderTrackLabel(track, this.control, this.displayInfo, gw, this.trackCtx(track)), gw)
       this.writeAt(gridRow, 2, renderStepGrid(track, this.displayInfo ?? this.dummyDisplayInfo(), gw), gw)
     }
     this.prevTrackPos = this.tracks.map((t) =>
@@ -274,7 +289,7 @@ export class PlayerScreen {
 
       if (pageChanged || prevPos < 0) {
         const labelRow = this.layout.trackStartRow + i * 3
-        this.writeAt(labelRow, 2, renderTrackLabel(track, this.control, info, gw), gw)
+        this.writeAt(labelRow, 2, renderTrackLabel(track, this.control, info, gw, this.trackCtx(track)), gw)
         this.writeAt(labelRow + 1, 2, renderStepGrid(track, info, gw), gw)
       } else if (playheadMoved) {
         const gridRow = this.layout.trackStartRow + i * 3 + 1
@@ -391,12 +406,14 @@ export class PlayerScreen {
     const soloCh = soloKeys[ch]
 
     if (muteCh === 0) {
+      this.soloActive = false
       const anyOn = this.tracks.some(t => (Atomics.load(this.control, 1) & (1 << t.channel)) === 0)
       const allMask = this.tracks.reduce((m, t) => m | (1 << t.channel), 0)
       Atomics.store(this.control, 1, anyOn ? allMask : 0)
       this.drawAllTracks()
       this.invalidateRightColumn()
     } else if (muteCh) {
+      this.soloActive = false
       const wasMuted = (Atomics.load(this.control, 1) & (1 << muteCh)) !== 0
       const mask = 1 << muteCh
       const cur = Atomics.load(this.control, 1)
@@ -404,10 +421,19 @@ export class PlayerScreen {
       this.drawAllTracks()
       this.invalidateRightColumn()
     } else if (soloCh) {
-      const track = this.tracks.find(t => t.channel === soloCh)
-      if (!track) return
-      const allMask = this.tracks.reduce((m, t) => m | (1 << t.channel), 0)
-      Atomics.store(this.control, 1, allMask & ~(1 << soloCh))
+      if (this.soloActive && this.soloChannel === soloCh) {
+        // Second press on same channel: restore pre-solo state
+        this.soloActive = false
+        Atomics.store(this.control, 1, this.preSoloMutes)
+      } else {
+        const track = this.tracks.find(t => t.channel === soloCh)
+        if (!track) return
+        this.preSoloMutes = Atomics.load(this.control, 1)
+        this.soloActive = true
+        this.soloChannel = soloCh
+        const allMask = this.tracks.reduce((m, t) => m | (1 << t.channel), 0)
+        Atomics.store(this.control, 1, allMask & ~(1 << soloCh))
+      }
       this.drawAllTracks()
       this.invalidateRightColumn()
     }
