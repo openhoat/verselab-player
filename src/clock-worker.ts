@@ -16,6 +16,7 @@ export interface DisplayInfo {
 export interface ScheduledEvent {
   timeMs: number
   message?: number[]
+  muteChannel?: number  // 1-indexed channel for mute check (original track channel, before GM remap)
   firstLoopOnly?: boolean
   display?: DisplayInfo
 }
@@ -100,9 +101,8 @@ function runLoop(schedule: ScheduledEvent[], loopMs: number, loop: boolean, step
       if (evt.timeMs > t) break
       if (evt.message && (!evt.firstLoopOnly || firstLoop)) {
         const cmd = evt.message[0] & 0xf0
-        const ch = evt.message[0] & 0x0f
-        // Only filter Note On on muted channels — let Note Off through for cleanup
-        if (cmd === 0x90 && isMuted(ch + 1)) { idx++; continue }
+        const muteCh = evt.muteChannel ?? ((evt.message[0] & 0x0f) + 1)
+        if (cmd === 0x90 && isMuted(muteCh)) { idx++; continue }
         send(evt.message)
       }
       if (DIAG && evt.message) {

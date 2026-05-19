@@ -6,6 +6,7 @@ import { Worker } from 'worker_threads'
 import { load as parseYaml } from 'js-yaml'
 import chalk from 'chalk'
 import { noteToMidi, GM_DRUM_NOTES as GM_DRUMS } from './core/midi-notes.js'
+import { DRUM_CATEGORIES, resolveGmProgram } from './core/gm-map.js'
 import type { DisplayInfo, ScheduledEvent, WorkerOutboundMessage } from './clock-worker.ts'
 import { PlayerScreen } from './ui/screen.js'
 import { resolveSongPath } from './core/paths.js'
@@ -38,6 +39,10 @@ export interface Track {
   clip: number  // MV-1 clip number (1-16), sent as Program Change (0-indexed)
   steps: number
   events: NoteEvent[]
+  isDrum?: boolean     // true for pattern-format drum tracks
+  sound?: string       // MV-1 sound name (e.g. "Fat808BS1 Long")
+  category?: string    // MV-1 sound category (e.g. "Synth Bass", "Drum Kit")
+  gmProgram?: number   // explicit GM program override (from gm_program: in YAML)
 }
 
 export interface SectionDef {
@@ -51,6 +56,7 @@ export interface SectionDef {
 }
 
 const GRID_VEL: Record<string, number> = { x: 0, X: 0, g: -20, o: -40 }
+
 
 function parsePattern(str: string, instrument: string): NoteEvent[] {
   const chars = str.replace(/[\s|]/g, '').split('')
@@ -93,6 +99,10 @@ function parseTracks(raw: Record<string, unknown>, aliases: Aliases): Track[] {
       const clip = (s.clip as number | undefined) ?? DEFAULT_CLIP
       const stepsOverride = s.steps as number | undefined
 
+      const sound = s.sound as string | undefined
+      const category = s.category as string | undefined
+      const gmProgram = s.gm_program as number | undefined
+
       if (Array.isArray(s.notes)) {
         const transpose = (s.transpose as number | undefined) ?? 0
         const events: NoteEvent[] = s.notes.flatMap((n: Record<string, unknown>) => {
@@ -109,16 +119,17 @@ function parseTracks(raw: Record<string, unknown>, aliases: Aliases): Track[] {
           return [{ step, note: Math.min(127, Math.max(0, noteToMidi(n.note as string | number) + transpose)), velocity, duration, sta }]
         })
         const steps = stepsOverride ?? Math.max(...events.map(e => e.step))
-        return { name, channel, clip, steps, events }
+        const isDrum = category !== undefined && DRUM_CATEGORIES.has(category)
+        return { name, channel, clip, steps, events, isDrum, sound, category, gmProgram }
       }
 
-      const DRUM_META = new Set(['channel', 'sound', 'category', 'steps'])
+      const DRUM_META = new Set(['channel', 'sound', 'category', 'steps', 'gm_program'])
       const patternEntries = Object.entries(s).filter(([k]) => !DRUM_META.has(k))
       const events: NoteEvent[] = patternEntries
         .flatMap(([instrument, pattern]) => parsePattern(pattern as string, instrument))
       const maxPatternLen = Math.max(...patternEntries.map(([, p]) => (p as string).replace(/[\s|]/g, '').length))
       const steps = stepsOverride ?? maxPatternLen
-      return { name, channel, clip, steps, events }
+      return { name, channel, clip, steps, events, isDrum: true, sound, category, gmProgram }
     })
 }
 
@@ -145,6 +156,9 @@ function loadTrackFile(filePath: string, trackName: string, aliases: Aliases, de
   const channel = (raw.track as number | undefined) ?? filenamePrefix(trackName) ?? 4
   const clip = (raw.clip as number | undefined) ?? defaultClip ?? DEFAULT_CLIP
   const stepsOverride = raw.steps as number | undefined
+  const sound = raw.sound as string | undefined
+  const category = raw.category as string | undefined
+  const gmProgram = raw.gm_program as number | undefined
 
   if (Array.isArray(raw.notes)) {
     const transpose = (raw.transpose as number | undefined) ?? 0
@@ -162,16 +176,17 @@ function loadTrackFile(filePath: string, trackName: string, aliases: Aliases, de
       return [{ step, note: Math.min(127, Math.max(0, noteToMidi(n.note as string | number) + transpose)), velocity, duration, sta }]
     })
     const steps = stepsOverride ?? Math.max(...events.map(e => e.step))
-    return { name: trackName, channel, clip, steps, events }
+    const isDrum = category !== undefined && DRUM_CATEGORIES.has(category)
+    return { name: trackName, channel, clip, steps, events, isDrum, sound, category, gmProgram }
   }
 
-  const TRACK_META = new Set(['track', 'sound', 'category', 'steps', 'transpose', 'notes', 'clip'])
+  const TRACK_META = new Set(['track', 'sound', 'category', 'steps', 'transpose', 'notes', 'clip', 'gm_program'])
   const patternEntries = Object.entries(raw).filter(([k]) => !TRACK_META.has(k))
   const events: NoteEvent[] = patternEntries
     .flatMap(([instrument, pattern]) => parsePattern(pattern as string, instrument))
   const maxPatternLen = Math.max(...patternEntries.map(([, p]) => (p as string).replace(/[\s|]/g, '').length))
   const steps = stepsOverride ?? maxPatternLen
-  return { name: trackName, channel, clip, steps, events }
+  return { name: trackName, channel, clip, steps, events, isDrum: true, sound, category, gmProgram }
 }
 
 function loadSequenceDir(seqDir: string, aliases: Aliases, defaultClip?: number): Track[] {
@@ -224,6 +239,7 @@ function showHelp(): void {
   console.log('  -h, --help             Show this help message')
   console.log('  -w, --wait             Wait for MV-1 START before playing; STOP pauses and re-arms')
   console.log('  --clock                Send MIDI Start/Clock (sync MV-1 sequencer)')
+  console.log('  -p, --port <name>      MIDI output port name pattern (default: mv-1, fallback: first port)')
   console.log('  -t, --track <spec>     Only play track matching channel, name, or prefix')
   console.log('  --no-watch             Disable file watching / hot-reload')
   console.log('  -s, --seq <n>          Play sequence number <n>')
@@ -235,8 +251,8 @@ function showHelp(): void {
   console.log('    bass: false')
 }
 
-function parseArgs(argv: string[]): { path?: string; wait: boolean; clock: boolean; watch: boolean; track?: string; seq?: string; section?: string; help: boolean } {
-  const result: { path?: string; wait: boolean; clock: boolean; watch: boolean; track?: string; seq?: string; section?: string; help: boolean } = { wait: false, clock: false, watch: true, help: false }
+function parseArgs(argv: string[]): { path?: string; wait: boolean; clock: boolean; watch: boolean; port?: string; track?: string; seq?: string; section?: string; help: boolean } {
+  const result: { path?: string; wait: boolean; clock: boolean; watch: boolean; port?: string; track?: string; seq?: string; section?: string; help: boolean } = { wait: false, clock: false, watch: true, help: false }
   let i = 0
   while (i < argv.length) {
     const arg = argv[i]
@@ -244,6 +260,7 @@ function parseArgs(argv: string[]): { path?: string; wait: boolean; clock: boole
     if (arg === '--wait' || arg === '-w') { result.wait = true; i++; continue }
     if (arg === '--clock') { result.clock = true; i++; continue }
     if (arg === '--no-watch') { result.watch = false; i++; continue }
+    if ((arg === '--port' || arg === '-p') && i + 1 < argv.length) { result.port = argv[++i]; i++; continue }
     if ((arg === '--seq' || arg === '-s') && i + 1 < argv.length) { result.seq = argv[++i]; i++; continue }
     if ((arg === '--section' || arg === '-S') && i + 1 < argv.length) { result.section = argv[++i]; i++; continue }
     if ((arg === '--track' || arg === '-t') && i + 1 < argv.length) { result.track = argv[++i]; i++; continue }
@@ -355,7 +372,8 @@ export function buildSchedule(
   bpm: number,
   trackState: Record<string, boolean>,
   hasExplicitTracks: boolean,
-  sendClock = false
+  sendClock = false,
+  gmMode = false
 ): { schedule: ScheduledEvent[], loopMs: number, sectionStarts: { name: string, step: number }[] } {
   const stepMs = 60000 / (bpm * 4)
   const clockMs = stepMs / CLOCKS_PER_STEP
@@ -381,20 +399,26 @@ export function buildSchedule(
   const totalBars = Math.round(totalSteps / 16)
   const events: ScheduledEvent[] = []
 
-  // Track which (channel, clip) combos have already been sent, to avoid duplicate PCs
-  // when a section repeats (same tracks, same clips).
-  let prevClips = new Map<number, number>()  // channel → last clip number sent
+  const trackCh = (track: Track) =>
+    gmMode && track.isDrum ? 9 : track.channel - 1
+  const trackPc = (track: Track): number | null => {
+    if (gmMode && track.isDrum) return null
+    if (gmMode) return track.gmProgram ?? resolveGmProgram(track.sound, track.category)
+    return track.clip - 1
+  }
 
-  // Initial clip change at timeMs=0 (before playback starts).
-  // Sent in the preroll period on the first loop only.
-  // On loop restart, the MV-1 already has the right clip selected.
+  // Track which PCs have been sent per effective channel, to avoid duplicates.
+  let prevClips = new Map<number, number>()  // effective channel → last PC sent
+
+  // Initial program change before playback starts (preroll period, first loop only).
   const firstSection = sections[0]
   for (const track of firstSection.tracks) {
     if (!isTrackActive(track, trackState, hasExplicitTracks)) continue
-    const ch = track.channel - 1
-    const pcValue = track.clip - 1  // clip is 1-indexed, PC value is 0-indexed
-    events.push({ timeMs: -prerollMs, message: [0xC0 | ch, pcValue], firstLoopOnly: true })
-    prevClips.set(ch, track.clip)
+    const ch = trackCh(track)
+    const pc = trackPc(track)
+    if (pc === null) continue
+    events.push({ timeMs: -prerollMs, message: [0xC0 | ch, pc], firstLoopOnly: true })
+    prevClips.set(ch, pc)
   }
 
   if (sendClock) {
@@ -432,12 +456,12 @@ export function buildSchedule(
       const pcTime = Math.max(0, t - advanceMs)
       for (const track of section.tracks) {
         if (!isTrackActive(track, trackState, hasExplicitTracks)) continue
-        const ch = track.channel - 1
-        const pcValue = track.clip - 1
-        // Only send PC if this channel's clip changed
-        if (prevClips.get(ch) !== track.clip) {
-          events.push({ timeMs: pcTime, message: [0xC0 | ch, pcValue] })
-          prevClips.set(ch, track.clip)
+        const ch = trackCh(track)
+        const pc = trackPc(track)
+        if (pc === null) continue
+        if (prevClips.get(ch) !== pc) {
+          events.push({ timeMs: pcTime, message: [0xC0 | ch, pc] })
+          prevClips.set(ch, pc)
         }
       }
     }
@@ -455,12 +479,13 @@ export function buildSchedule(
     for (const track of section.tracks) {
       if (!isTrackActive(track, trackState, hasExplicitTracks)) continue
       const pos = ((step - 1) % track.steps) + 1
+      const ch = trackCh(track)
       for (const evt of track.events) {
         if (evt.step !== pos) continue
-        const ch = track.channel - 1  // raw MIDI: 0-indexed
         const staOffset = ((evt.sta ?? 0) / CLOCKS_PER_STEP) * stepMs
-        events.push({ timeMs: t + staOffset, message: [0x90 | ch, evt.note, evt.velocity] })
-        events.push({ timeMs: t + staOffset + (evt.duration ?? 1) * stepMs * 0.9, message: [0x80 | ch, evt.note, 0] })
+        const mc = track.channel
+        events.push({ timeMs: t + staOffset, message: [0x90 | ch, evt.note, evt.velocity], muteChannel: mc })
+        events.push({ timeMs: t + staOffset + (evt.duration ?? 1) * stepMs * 0.9, message: [0x80 | ch, evt.note, 0], muteChannel: mc })
       }
     }
   }
@@ -556,15 +581,24 @@ async function main() {
     encoding: 'utf-8',
   })
   const portNames: string[] = discovery.stdout ? JSON.parse(discovery.stdout) : []
-  let portIndex = portNames.findIndex(n => n.toLowerCase().includes('mv-1'))
+  const pattern = cli.port ?? 'mv-1'
+  let portIndex = portNames.findIndex(n => n.toLowerCase().includes(pattern.toLowerCase()))
   if (portIndex < 0) {
-    const hint = portNames.length > 0
-      ? `Available ports: ${portNames.join(', ')}`
-      : 'No MIDI ports detected — is the MV-1 connected and in MIDI mode (not Storage mode)?'
-    console.error(chalk.red('✕') + `  MV-1 not found on MIDI. ${hint}`)
-    process.exit(1)
+    if (cli.port !== undefined) {
+      const hint = portNames.length > 0 ? `Available ports: ${portNames.join(', ')}` : 'No MIDI ports detected'
+      console.error(chalk.red('✕') + `  Port "${cli.port}" not found. ${hint}`)
+      process.exit(1)
+    }
+    if (portNames.length === 0) {
+      console.error(chalk.red('✕') + '  No MIDI ports detected — is a MIDI device connected?')
+      process.exit(1)
+    }
+    portIndex = portNames.findIndex(n => !n.toLowerCase().includes('midi through'))
+    if (portIndex < 0) portIndex = 0
+    console.log(chalk.yellow('⚠') + `  MV-1 not found, using: ${portNames[portIndex]}`)
   }
   const portName = portNames[portIndex]
+  const gmMode = !portName.toLowerCase().includes('mv-1')
 
   const alsaPort = cli.wait ? findAlsaSeqPort('mv-1') : null
   const effectiveWait = cli.wait && !!alsaPort
@@ -679,7 +713,7 @@ async function main() {
     screen.drawMessage(`  ${chalk.yellow('↻')}  Change detected, restarting at cycle end…`)
 
     if (workerActive) {
-      const { schedule, loopMs, sectionStarts: newSectionStarts } = buildSchedule(sections, bpm, trackState, hasExplicitTracks, cli.clock && !effectiveWait)
+      const { schedule, loopMs, sectionStarts: newSectionStarts } = buildSchedule(sections, bpm, trackState, hasExplicitTracks, cli.clock && !effectiveWait, gmMode)
       sectionStarts = newSectionStarts
       reloading = true
       worker.postMessage({ type: 'reload', schedule, loopMs, loop: shouldLoop && !effectiveWait, noClock: !cli.clock || effectiveWait, stepMs: 60000 / (bpm * 4) })
@@ -763,7 +797,7 @@ async function main() {
       if (exiting) break
     }
 
-    const { schedule, loopMs, sectionStarts: newSectionStarts } = buildSchedule(sections, bpm, trackState, hasExplicitTracks, cli.clock && !effectiveWait)
+    const { schedule, loopMs, sectionStarts: newSectionStarts } = buildSchedule(sections, bpm, trackState, hasExplicitTracks, cli.clock && !effectiveWait, gmMode)
     sectionStarts = newSectionStarts
     workerActive = true
     screen.setWorkerActive(true)

@@ -200,6 +200,10 @@ export class PlayerScreen {
   updateTracks(tracks: Track[]) {
     const countChanged = tracks.length !== this.tracks.length
     this.setTracks(tracks)
+    if (this.soloActive) {
+      const allMask = tracks.reduce((m, t) => m | (1 << t.channel), 0)
+      Atomics.store(this.control, 1, allMask & ~(1 << this.soloChannel))
+    }
     if (countChanged) {
       this.rebuildLayout(tracks.length)
       this.drawAll()
