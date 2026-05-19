@@ -88,6 +88,7 @@ export class PlayerScreen {
     term.on('key', (name: string, _matches: string[], data: { isCharacter: boolean; codepoints: number[] }) => {
       if (name === 'ESCAPE' || name === 'CTRL_C') { this.onExit?.(); return }
       if (!this.workerActive) return
+      if (name === 'LEFT' || name === 'RIGHT') { this.handleSeek(name === 'RIGHT' ? 1 : -1); return }
       const ch = data.codepoints?.[0] ? String.fromCodePoint(data.codepoints[0]) : (data.isCharacter ? name : '')
       if (!ch) return
       this.handleMuteSolo(ch)
@@ -462,6 +463,11 @@ export class PlayerScreen {
       this.drawAllTracks()
       this.invalidateRightColumn()
     }
+  }
+
+  private handleSeek(deltaBars: number) {
+    Atomics.add(this.control, 2, deltaBars)
+    Atomics.notify(this.control, 0)
   }
 
   private dummyDisplayInfo(): DisplayInfo {

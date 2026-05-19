@@ -41,11 +41,12 @@ function allNotesOff() {
   }
 }
 
-function runLoop(schedule: ScheduledEvent[], loopMs: number, loop: boolean) {
+function runLoop(schedule: ScheduledEvent[], loopMs: number, loop: boolean, stepMs: number) {
   let loopStart = performance.now()
   let idx = 0
   let firstLoop = true
   let prevMuted = 0
+  const barMs = 16 * stepMs
 
   // Timing diagnostics: measure actual step lateness vs schedule
   const DIAG = process.env.VERSELAB_DIAG === '1'
@@ -70,6 +71,27 @@ function runLoop(schedule: ScheduledEvent[], loopMs: number, loop: boolean) {
       }
     }
     prevMuted = curMuted
+
+    // Seek: consume accumulated bar delta from main thread
+    const seekDelta = Atomics.exchange(control, 2, 0)
+    if (seekDelta !== 0) {
+      for (let ch = 0; ch < 16; ch++) {
+        try { send([0xB0 | ch, 123, 0]) } catch {}
+      }
+      loopStart -= seekDelta * barMs
+      const seekT = performance.now() - loopStart
+      if (seekT < 0) loopStart = performance.now()
+      else if (seekT >= loopMs) loopStart = performance.now() - loopMs + barMs
+      const adjT = performance.now() - loopStart
+      idx = schedule.findIndex(e => e.timeMs > adjT)
+      if (idx < 0) idx = schedule.length
+      for (let i = idx - 1; i >= 0; i--) {
+        if (schedule[i].display) {
+          parentPort!.postMessage({ type: 'display', info: schedule[i].display })
+          break
+        }
+      }
+    }
 
     const now = performance.now()
     const t = now - loopStart
@@ -107,7 +129,7 @@ function runLoop(schedule: ScheduledEvent[], loopMs: number, loop: boolean) {
   }
 }
 
-function play(schedule: ScheduledEvent[], loopMs: number, loop: boolean, noClock = false) {
+function play(schedule: ScheduledEvent[], loopMs: number, loop: boolean, noClock = false, stepMs = 0) {
   noClockMode = noClock
   // If exit was requested while we were transitioning, don't start a new loop
   if (Atomics.load(control, 0) === 2) {
@@ -116,7 +138,7 @@ function play(schedule: ScheduledEvent[], loopMs: number, loop: boolean, noClock
     return
   }
   Atomics.store(control, 0, 0)
-  runLoop(schedule, loopMs, loop)
+  runLoop(schedule, loopMs, loop, stepMs)
   allNotesOff()
 
   const ctrl = Atomics.load(control, 0)
@@ -135,8 +157,8 @@ function play(schedule: ScheduledEvent[], loopMs: number, loop: boolean, noClock
 }
 
 type WorkerInboundMessage =
-  | { type: 'start'; portIndex: number; schedule: ScheduledEvent[]; loopMs: number; loop?: boolean; noClock?: boolean }
-  | { type: 'reload'; schedule: ScheduledEvent[]; loopMs: number; loop?: boolean; noClock?: boolean }
+  | { type: 'start'; portIndex: number; schedule: ScheduledEvent[]; loopMs: number; loop?: boolean; noClock?: boolean; stepMs?: number }
+  | { type: 'reload'; schedule: ScheduledEvent[]; loopMs: number; loop?: boolean; noClock?: boolean; stepMs?: number }
 
 export type WorkerOutboundMessage =
   | { type: 'display'; info: DisplayInfo }
@@ -147,9 +169,9 @@ export type WorkerOutboundMessage =
 parentPort!.on('message', (msg: WorkerInboundMessage) => {
   if (msg.type === 'start') {
     out.openPort(msg.portIndex)
-    play(msg.schedule, msg.loopMs, msg.loop ?? true, msg.noClock ?? false)
+    play(msg.schedule, msg.loopMs, msg.loop ?? true, msg.noClock ?? false, msg.stepMs ?? 0)
   } else if (msg.type === 'reload') {
     // Schedule data arrives here after runLoop yields (ctrl=3 broke the loop)
-    play(msg.schedule, msg.loopMs, msg.loop ?? true, msg.noClock ?? false)
+    play(msg.schedule, msg.loopMs, msg.loop ?? true, msg.noClock ?? false, msg.stepMs ?? 0)
   }
 })

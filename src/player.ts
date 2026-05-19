@@ -559,12 +559,14 @@ async function main() {
 
   const alsaPort = cli.wait ? findAlsaSeqPort('mv-1') : null
   const effectiveWait = cli.wait && !!alsaPort
+  const isSongMode = isDir && !cli.seq && !cli.section
+  const shouldLoop = !isSongMode
   const stopHint = effectiveWait
     ? 'MV-1 START/STOP to play/pause  —  ESC to exit'
-    : 'ESC to stop'
+    : 'ESC to stop  —  ◀▶ seek'
 
   // Create shared control buffer
-  const controlBuffer = new SharedArrayBuffer(8)
+  const controlBuffer = new SharedArrayBuffer(12)
   const control = new Int32Array(controlBuffer)
 
   // Initialize screen
@@ -656,7 +658,7 @@ async function main() {
     if (workerActive) {
       const { schedule, loopMs } = buildSchedule(sections, bpm, trackState, hasExplicitTracks, cli.clock && !effectiveWait)
       reloading = true
-      worker.postMessage({ type: 'reload', schedule, loopMs, loop: !effectiveWait, noClock: !cli.clock || effectiveWait })
+      worker.postMessage({ type: 'reload', schedule, loopMs, loop: shouldLoop && !effectiveWait, noClock: !cli.clock || effectiveWait, stepMs: 60000 / (bpm * 4) })
       Atomics.store(control, 0, 3)
       Atomics.notify(control, 0)
     }
@@ -744,10 +746,15 @@ async function main() {
 
     await new Promise<void>(r => {
       resolveStop = r
-      worker.postMessage({ type: 'start', portIndex, schedule, loopMs, loop: !effectiveWait, noClock: !cli.clock || effectiveWait })
+      worker.postMessage({ type: 'start', portIndex, schedule, loopMs, loop: shouldLoop && !effectiveWait, noClock: !cli.clock || effectiveWait, stepMs: 60000 / (bpm * 4) })
     })
 
     if (!effectiveWait) break
+  }
+
+  if (!exiting) {
+    screen.showStopped()
+    setTimeout(() => exit(), 1500)
   }
 }
 
