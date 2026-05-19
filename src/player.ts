@@ -589,6 +589,7 @@ async function main() {
   })
 
   // Display state
+  let currentSectionName = sections[0].name
   let displayInfo: DisplayInfo | null = null
   let workerActive = false
   let reloading = false
@@ -602,6 +603,11 @@ async function main() {
   worker.on('message', (msg: WorkerOutboundMessage) => {
     if (msg.type === 'display') {
       screen.setDisplayInfo(msg.info)
+      if (msg.info.section !== currentSectionName) {
+        currentSectionName = msg.info.section
+        const section = sections.find(s => s.name === msg.info.section)
+        if (section) screen.updateTracks(section.tracks)
+      }
     } else if (msg.type === 'stopped') {
       workerActive = false
       screen.setWorkerActive(false)
@@ -610,7 +616,7 @@ async function main() {
     } else if (msg.type === 'restarting') {
       // Worker reached cycle end and is restarting with new schedule
       screen.clearMessage()
-      screen.drawTracks()
+      currentSectionName = ''
       reloading = false
     } else if (msg.type === 'done') {
       // Worker has sent allNotesOff and closed port — safe to exit

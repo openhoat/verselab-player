@@ -435,7 +435,7 @@ function lintDrumTrack(doc: any, _filePath: string, fileRel: string): LintIssue[
     }
 
     // Check for invalid characters
-    const invalidChars = stripped.split('').filter(c => !'xX.'.includes(c))
+    const invalidChars = stripped.split('').filter(c => !'xXgo.'.includes(c))
     if (invalidChars.length > 0) {
       const unique = [...new Set(invalidChars)]
       issues.push(issue(fileRel, 'error', `instrument "${instrument}" pattern has invalid characters: ${unique.join(', ')}`))

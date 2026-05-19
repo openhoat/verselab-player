@@ -194,6 +194,18 @@ export class PlayerScreen {
     this.invalidateRightColumn()
   }
 
+  updateTracks(tracks: Track[]) {
+    const countChanged = tracks.length !== this.tracks.length
+    this.setTracks(tracks)
+    if (countChanged) {
+      this.rebuildLayout(tracks.length)
+      this.drawAll()
+    } else {
+      this.drawAllTracks()
+      this.invalidateRightColumn()
+    }
+  }
+
   destroy() {
     if (this.displayInterval) clearInterval(this.displayInterval)
     if (this.waitBlinker) clearInterval(this.waitBlinker)
