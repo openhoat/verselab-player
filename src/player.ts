@@ -626,6 +626,7 @@ async function main() {
 
   worker.on('message', (msg: WorkerOutboundMessage) => {
     if (msg.type === 'display') {
+      displayInfo = msg.info
       screen.setDisplayInfo(msg.info)
       if (msg.info.section !== currentSectionName) {
         currentSectionName = msg.info.section
