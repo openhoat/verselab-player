@@ -151,10 +151,64 @@ export function renderPosition(info: DisplayInfo, width: number): string {
 
 // ── BPM with beat pulse ──
 
-export function renderBPM(bpm: number, pulse: boolean): string {
-  const bpmStr = `${bpm} BPM`
-  if (pulse) return `${chalk.yellow.bold(bpmStr)} ${chalk.yellow('♦')}`
-  return chalk.yellow(bpmStr)
+export function renderBPM(bpm: number, pulseAge: number): string {
+  const bpmStr = chalk.yellow(`${bpm} BPM`)
+  const dot = pulseAge < 200 ? chalk.yellow('♦') : chalk.dim('♦')
+  return `${bpmStr} ${dot}`
+}
+
+// ── Velocity graph ──
+
+const VEL_BLOCKS = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█']
+
+function velToBlock(vel: number): string {
+  return VEL_BLOCKS[Math.round((vel / 127) * (VEL_BLOCKS.length - 1))]
+}
+
+export function renderVelocityGraph(track: Track, displayInfo: DisplayInfo, gridWidth: number): string {
+  const trackPos = displayInfo.step % track.steps
+  const avail = gridWidth - 2
+  const numGroups = Math.max(2, Math.min(8, Math.floor((avail + 1) / 5)))
+  const stepsPerPage = numGroups * 4
+  const page = Math.floor(trackPos / stepsPerPage)
+  const pageStart = page * stepsPerPage
+  const pageEnd = Math.min(pageStart + stepsPerPage - 1, track.steps - 1)
+  const playheadCol = trackPos % stepsPerPage
+  const activeBeat = Math.floor(playheadCol / 4)
+
+  const activeSteps = new Map<number, number>()
+  for (const evt of track.events) {
+    if (evt.step - 1 >= pageStart && evt.step - 1 <= pageEnd) {
+      const existing = activeSteps.get(evt.step) ?? 0
+      if (evt.velocity > existing) activeSteps.set(evt.step, evt.velocity)
+    }
+  }
+
+  const cells: string[] = []
+  for (let i = 0; i <= pageEnd - pageStart; i++) {
+    const step1 = pageStart + i + 1
+    const inActiveBeat = Math.floor(i / 4) === activeBeat
+    const vel = activeSteps.get(step1)
+    if (vel !== undefined) {
+      const block = velToBlock(vel)
+      const raw = vel > 100 ? chalk.red(block) : vel > 64 ? chalk.yellow(block) : chalk.green(block)
+      cells.push(inActiveBeat ? raw : chalk.dim(raw))
+    } else {
+      cells.push(' ')
+    }
+  }
+  while (cells.length < stepsPerPage) cells.push(' ')
+
+  const groups: string[] = []
+  for (let g = 0; g < numGroups; g++) {
+    groups.push(cells.slice(g * 4, g * 4 + 4).join(''))
+  }
+
+  return `${chalk.dim('│')}${groups.join(chalk.dim(STEP_BEAT_SEP))}${chalk.dim('│')}`
+}
+
+export function renderTrackSeparator(innerWidth: number): string {
+  return chalk.dim('─'.repeat(innerWidth))
 }
 
 // ── VU meter ──

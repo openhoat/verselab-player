@@ -1,7 +1,8 @@
 import chalk from 'chalk'
 import { term } from './termkit.js'
 import {
-  renderStepGrid, renderTrackLabel, renderTransport, renderPosition,
+  renderStepGrid, renderVelocityGraph, renderTrackSeparator,
+  renderTrackLabel, renderTransport, renderPosition,
   renderBPM, renderVUMeter, renderTitle, renderConnection,
   renderFrameTop, renderFrameHeaderSep, renderFrameFooterSep, renderFrameBottom,
   renderKeyHints, type TrackDisplayCtx,
@@ -18,6 +19,7 @@ interface Layout {
   headerRow: number
   headerSepRow: number
   trackStartRow: number
+  stride: number
   footerSepRow: number
   keyHintRow: number
   bottomRow: number
@@ -53,7 +55,7 @@ export class PlayerScreen {
   private waitBlinker: ReturnType<typeof setInterval> | null = null
   private onExit: (() => void) | null = null
   private workerActive = false
-  private beatPulse = false
+  private beatPulseAt = 0
   private lastBeat = -1
   private trackActivity: number[] = []
   private prevTrackPos: number[] = []
@@ -122,10 +124,8 @@ export class PlayerScreen {
       // Beat pulse
       const currentBeat = Math.floor(info.step / 4)
       if (currentBeat !== this.lastBeat) {
-        this.beatPulse = true
+        this.beatPulseAt = Date.now()
         this.lastBeat = currentBeat
-      } else {
-        this.beatPulse = false
       }
 
       // VU activity
@@ -214,7 +214,11 @@ export class PlayerScreen {
     const headerRow = 2
     const headerSepRow = 3
     const trackStartRow = 4
-    const footerSepRow = trackStartRow + trackCount * 3 - 1
+
+    // Adaptive stride: label + grid + vel + separator, spread to fill height
+    const availTrackRows = Math.max(0, h - 6)
+    const stride = Math.min(8, Math.max(4, Math.floor(availTrackRows / Math.max(1, trackCount))))
+    const footerSepRow = trackStartRow + (trackCount - 1) * stride + 3
     const keyHintRow = footerSepRow + 1
     const bottomRow = keyHintRow + 1
 
@@ -227,7 +231,7 @@ export class PlayerScreen {
       width: w, height: h,
       leftWidth, rightWidth,
       headerRow, headerSepRow,
-      trackStartRow, footerSepRow,
+      trackStartRow, stride, footerSepRow,
       keyHintRow, bottomRow,
       rightTransportRow, rightBarRow, rightProgressRow, rightVUStartRow,
     }
@@ -261,12 +265,18 @@ export class PlayerScreen {
 
   private drawAllTracks() {
     const gw = this.layout.leftWidth - 2
+    const { stride, trackStartRow } = this.layout
+    const di = this.displayInfo ?? this.dummyDisplayInfo()
     for (let i = 0; i < this.tracks.length; i++) {
-      const labelRow = this.layout.trackStartRow + i * 3
-      const gridRow = labelRow + 1
+      const base = trackStartRow + i * stride
       const track = this.tracks[i]
-      this.writeAt(labelRow, 2, renderTrackLabel(track, this.control, this.displayInfo, gw, this.trackCtx(track)), gw)
-      this.writeAt(gridRow, 2, renderStepGrid(track, this.displayInfo ?? this.dummyDisplayInfo(), gw), gw)
+      const ctx = this.trackCtx(track)
+      this.writeAt(base, 2, renderTrackLabel(track, this.control, this.displayInfo, gw, ctx), gw)
+      this.writeAt(base + 1, 2, renderStepGrid(track, di, gw), gw)
+      this.writeAt(base + 2, 2, renderVelocityGraph(track, di, gw), gw)
+      if (i < this.tracks.length - 1) {
+        this.writeAt(base + 3, 2, renderTrackSeparator(gw), gw)
+      }
     }
     this.prevTrackPos = this.tracks.map((t) =>
       this.displayInfo ? this.displayInfo.step % t.steps : -1
@@ -275,6 +285,7 @@ export class PlayerScreen {
 
   private drawStepGrids(info: DisplayInfo) {
     const gw = this.layout.leftWidth - 2
+    const { stride, trackStartRow } = this.layout
     const avail = gw - 2
     const numGroups = Math.max(2, Math.min(8, Math.floor((avail + 1) / 5)))
     const stepsPerPage = numGroups * 4
@@ -287,13 +298,15 @@ export class PlayerScreen {
       const pageChanged = prevPos >= 0 && Math.floor(trackPos / stepsPerPage) !== Math.floor(prevPos / stepsPerPage)
       const playheadMoved = trackPos !== prevPos
 
+      const base = trackStartRow + i * stride
+
       if (pageChanged || prevPos < 0) {
-        const labelRow = this.layout.trackStartRow + i * 3
-        this.writeAt(labelRow, 2, renderTrackLabel(track, this.control, info, gw, this.trackCtx(track)), gw)
-        this.writeAt(labelRow + 1, 2, renderStepGrid(track, info, gw), gw)
+        this.writeAt(base, 2, renderTrackLabel(track, this.control, info, gw, this.trackCtx(track)), gw)
+        this.writeAt(base + 1, 2, renderStepGrid(track, info, gw), gw)
+        this.writeAt(base + 2, 2, renderVelocityGraph(track, info, gw), gw)
       } else if (playheadMoved) {
-        const gridRow = this.layout.trackStartRow + i * 3 + 1
-        this.writeAt(gridRow, 2, renderStepGrid(track, info, gw), gw)
+        this.writeAt(base + 1, 2, renderStepGrid(track, info, gw), gw)
+        this.writeAt(base + 2, 2, renderVelocityGraph(track, info, gw), gw)
       }
 
       this.prevTrackPos[i] = trackPos
@@ -329,7 +342,7 @@ export class PlayerScreen {
     }
 
     // BPM — only if changed
-    const bpmStr = renderBPM(this.bpm, this.beatPulse)
+    const bpmStr = renderBPM(this.bpm, Date.now() - this.beatPulseAt)
     if (bpmStr !== this.prevBPM) {
       const bpmRow = this.layout.headerSepRow + 1
       this.writeAt(bpmRow, leftCol + 2, bpmStr, w - 2)
