@@ -28,8 +28,9 @@ Real-time MIDI sequencer for the **Roland Verselab MV-1**. Write patterns in YAM
 - **Hot-reload** — edit any YAML file while playing; changes take effect on the next loop, no interruption
 - **Precise timing** — playback runs in a dedicated worker thread with sub-millisecond scheduling
 - **MIDI clock** — send Start/Clock to lock the MV-1's sequencer to your tempo, or wait for its START signal
-- **Live controls** — mute and solo tracks on the fly with single keystrokes during playback
-- **Terminal UI** — per-track step grid, velocity graph, VU meters, adaptive layout
+- **Live controls** — mute and solo tracks on the fly, seek by bar or jump between sections with arrow keys
+- **Terminal UI** — per-track step grid, velocity graph, VU meters, BPM pulse, adaptive layout
+- **Song mode** — plays the full arrangement once (no loop); single sequences still loop
 - **Capture** — record patterns directly from the MV-1 into YAML track files
 - **SMF export** — export sequences as `.mid` files to the MV-1's USB storage for direct import
 
@@ -63,17 +64,17 @@ npm link
 ## Quick Start
 
 ```bash
-# Play a song from the current directory
+# Play a song (plays arrangement once, no loop)
 verselab-play my-song/
 
-# Play and send MIDI clock to the MV-1's sequencer
+# Play a single sequence (loops automatically)
+verselab-play my-song/ --seq 2
+
+# Play and send MIDI clock to lock the MV-1's sequencer
 verselab-play my-song/ --clock
 
 # Wait for the MV-1's PLAY button before starting
 verselab-play my-song/ --wait --clock
-
-# Play a single sequence
-verselab-play my-song/ --seq 2
 
 # Play a named section
 verselab-play my-song/ --section verse
@@ -145,6 +146,7 @@ Pattern characters:
 | `x`  | Hit (velocity 100)   |
 | `X`  | Accent (velocity 127)|
 | `o`  | Ghost note (vel 40)  |
+| `g`  | Ghost note (vel 40, alias) |
 | `-`  | Rest                 |
 | `\|` | Visual bar separator (ignored) |
 
@@ -278,25 +280,35 @@ npm run sounds fix my-song/ --write    # normalise sound field names
 
 ## Live Controls
 
-During playback, track muting and soloing are controlled with single keystrokes.
+During playback, use single keystrokes for muting/soloing and arrow keys for navigation.
 
-### AZERTY (default)
+### Seek and navigation
 
-| Action        | Keys                          |
-|---------------|-------------------------------|
-| Mute track 1–7 | `&` `é` `"` `'` `(` `-` `è` |
-| Mute all / unmute all | `à`               |
-| Solo track 1–7 | `1` `2` `3` `4` `5` `6` `7` |
+| Key       | Action                         |
+|-----------|--------------------------------|
+| `Left`    | Seek backward by one bar       |
+| `Right`   | Seek forward by one bar        |
+| `Up`      | Jump to previous section       |
+| `Down`    | Jump to next section           |
+| `Esc`     | Stop playback                  |
+
+### Mute and solo (AZERTY, default)
+
+| Action                 | Keys                          |
+|------------------------|-------------------------------|
+| Mute track 1–7         | `&` `é` `"` `'` `(` `-` `è` |
+| Mute all / unmute all  | `à`                          |
+| Solo track 1–7         | `1` `2` `3` `4` `5` `6` `7` |
 
 > Solo: press once to isolate a track, press again on the same key to restore.
 
-### QWERTY
+### Mute and solo (QWERTY)
 
-| Action        | Keys                          |
-|---------------|-------------------------------|
-| Mute track 1–7 | `1` `2` `3` `4` `5` `6` `7` |
-| Mute all / unmute all | `0`               |
-| Solo track 1–7 | `!` `@` `#` `$` `%` `^` `&` |
+| Action                 | Keys                          |
+|------------------------|-------------------------------|
+| Mute track 1–7         | `1` `2` `3` `4` `5` `6` `7` |
+| Mute all / unmute all  | `0`                          |
+| Solo track 1–7         | `!` `@` `#` `$` `%` `^` `&` |
 
 ---
 
