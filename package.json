@@ -3,7 +3,6 @@
   "version": "1.0.0",
   "description": "Real-time MIDI sequencer for Roland Verselab MV-1",
   "type": "module",
-  "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/player.ts",
@@ -15,7 +14,8 @@
     "lint:verselab": "tsx src/cli/lint.ts",
     "record": "tsx src/record.ts",
     "scan": "tsx src/scan.ts",
-    "sounds": "tsx src/cli/sounds.ts"
+    "sounds": "tsx src/cli/sounds.ts",
+    "export": "tsx src/cli/export.ts"
   },
   "keywords": [
     "midi",
@@ -35,6 +35,7 @@
     "dotenv": "^16.4.5",
     "js-yaml": "4.1.1",
     "midi": "2.0.0",
+    "midi-file": "1.2.4",
     "ora": "9.4.0",
     "terminal-kit": "3.1.2",
     "ts-node": "10.9.2",
