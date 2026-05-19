@@ -54,6 +54,7 @@ export class PlayerScreen {
   private displayInterval: ReturnType<typeof setInterval> | null = null
   private waitBlinker: ReturnType<typeof setInterval> | null = null
   private onExit: (() => void) | null = null
+  onSectionSeek: ((delta: number) => void) | null = null
   private workerActive = false
   private beatPulseAt = 0
   private lastBeat = -1
@@ -89,6 +90,7 @@ export class PlayerScreen {
       if (name === 'ESCAPE' || name === 'CTRL_C') { this.onExit?.(); return }
       if (!this.workerActive) return
       if (name === 'LEFT' || name === 'RIGHT') { this.handleSeek(name === 'RIGHT' ? 1 : -1); return }
+      if (name === 'UP' || name === 'DOWN') { this.onSectionSeek?.(name === 'DOWN' ? 1 : -1); return }
       const ch = data.codepoints?.[0] ? String.fromCodePoint(data.codepoints[0]) : (data.isCharacter ? name : '')
       if (!ch) return
       this.handleMuteSolo(ch)
@@ -466,7 +468,7 @@ export class PlayerScreen {
   }
 
   private handleSeek(deltaBars: number) {
-    Atomics.add(this.control, 2, deltaBars)
+    Atomics.add(this.control, 2, deltaBars * 16)
     Atomics.notify(this.control, 0)
   }
 

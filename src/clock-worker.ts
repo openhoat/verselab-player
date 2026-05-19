@@ -46,7 +46,6 @@ function runLoop(schedule: ScheduledEvent[], loopMs: number, loop: boolean, step
   let idx = 0
   let firstLoop = true
   let prevMuted = 0
-  const barMs = 16 * stepMs
 
   // Timing diagnostics: measure actual step lateness vs schedule
   const DIAG = process.env.VERSELAB_DIAG === '1'
@@ -72,16 +71,16 @@ function runLoop(schedule: ScheduledEvent[], loopMs: number, loop: boolean, step
     }
     prevMuted = curMuted
 
-    // Seek: consume accumulated bar delta from main thread
+    // Seek: consume accumulated step delta from main thread
     const seekDelta = Atomics.exchange(control, 2, 0)
     if (seekDelta !== 0) {
       for (let ch = 0; ch < 16; ch++) {
         try { send([0xB0 | ch, 123, 0]) } catch {}
       }
-      loopStart -= seekDelta * barMs
+      loopStart -= seekDelta * stepMs
       const seekT = performance.now() - loopStart
       if (seekT < 0) loopStart = performance.now()
-      else if (seekT >= loopMs) loopStart = performance.now() - loopMs + barMs
+      else if (seekT >= loopMs) loopStart = performance.now() - loopMs + stepMs * 4
       const adjT = performance.now() - loopStart
       idx = schedule.findIndex(e => e.timeMs > adjT)
       if (idx < 0) idx = schedule.length

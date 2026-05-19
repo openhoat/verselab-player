@@ -356,7 +356,7 @@ export function buildSchedule(
   trackState: Record<string, boolean>,
   hasExplicitTracks: boolean,
   sendClock = false
-): { schedule: ScheduledEvent[], loopMs: number } {
+): { schedule: ScheduledEvent[], loopMs: number, sectionStarts: { name: string, step: number }[] } {
   const stepMs = 60000 / (bpm * 4)
   const clockMs = stepMs / CLOCKS_PER_STEP
   const prerollMs = PREROLL_STEPS * stepMs
@@ -377,7 +377,6 @@ export function buildSchedule(
   }
 
   const totalSteps = playbackSteps.length
-  const totalClocks = (totalSteps + PREROLL_STEPS) * CLOCKS_PER_STEP
   const loopMs = totalSteps * stepMs
   const totalBars = Math.round(totalSteps / 16)
   const events: ScheduledEvent[] = []
@@ -467,7 +466,17 @@ export function buildSchedule(
   }
 
   events.sort((a, b) => a.timeMs - b.timeMs)
-  return { schedule: events, loopMs }
+
+  // Compute section start indices for seek navigation
+  const sectionStarts: { name: string, step: number }[] = []
+  for (let i = 0; i < playbackSteps.length; i++) {
+    const ps = playbackSteps[i]
+    if (i === 0 || ps.section !== playbackSteps[i - 1].section || (ps.rep === 1 && ps.step === 1)) {
+      sectionStarts.push({ name: ps.section.name, step: i })
+    }
+  }
+
+  return { schedule: events, loopMs, sectionStarts }
 }
 
 async function main() {
@@ -563,7 +572,7 @@ async function main() {
   const shouldLoop = !isSongMode
   const stopHint = effectiveWait
     ? 'MV-1 START/STOP to play/pause  —  ESC to exit'
-    : 'ESC to stop  —  ◀▶ seek'
+    : 'ESC to stop  —  ◀▶ bars  ▲▼ sections'
 
   // Create shared control buffer
   const controlBuffer = new SharedArrayBuffer(12)
@@ -576,6 +585,18 @@ async function main() {
   screen.drawConnection(portName, stopHint)
   screen.drawTitle(title, bpm)
   screen.drawTracks()
+  screen.onSectionSeek = (delta: number) => {
+    if (!displayInfo || sectionStarts.length === 0) return
+    const currentStep = displayInfo.totalStep
+    let targetIdx = sectionStarts.findIndex(s => s.step > currentStep) - 1
+    if (targetIdx < 0) targetIdx = sectionStarts.length - 1
+    const nextIdx = Math.max(0, Math.min(sectionStarts.length - 1, targetIdx + delta))
+    const seekDelta = sectionStarts[nextIdx].step - currentStep
+    if (seekDelta !== 0) {
+      Atomics.add(control, 2, seekDelta)
+      Atomics.notify(control, 0)
+    }
+  }
 
   if (cli.wait && !alsaPort) {
     screen.drawMessage(`  ${chalk.yellow('⚠')}  No MIDI input — starting automatically`)
@@ -592,6 +613,7 @@ async function main() {
 
   // Display state
   let currentSectionName = sections[0].name
+  let sectionStarts: { name: string, step: number }[] = []
   let displayInfo: DisplayInfo | null = null
   let workerActive = false
   let reloading = false
@@ -656,7 +678,8 @@ async function main() {
     screen.drawMessage(`  ${chalk.yellow('↻')}  Change detected, restarting at cycle end…`)
 
     if (workerActive) {
-      const { schedule, loopMs } = buildSchedule(sections, bpm, trackState, hasExplicitTracks, cli.clock && !effectiveWait)
+      const { schedule, loopMs, sectionStarts: newSectionStarts } = buildSchedule(sections, bpm, trackState, hasExplicitTracks, cli.clock && !effectiveWait)
+      sectionStarts = newSectionStarts
       reloading = true
       worker.postMessage({ type: 'reload', schedule, loopMs, loop: shouldLoop && !effectiveWait, noClock: !cli.clock || effectiveWait, stepMs: 60000 / (bpm * 4) })
       Atomics.store(control, 0, 3)
@@ -739,7 +762,8 @@ async function main() {
       if (exiting) break
     }
 
-    const { schedule, loopMs } = buildSchedule(sections, bpm, trackState, hasExplicitTracks, cli.clock && !effectiveWait)
+    const { schedule, loopMs, sectionStarts: newSectionStarts } = buildSchedule(sections, bpm, trackState, hasExplicitTracks, cli.clock && !effectiveWait)
+    sectionStarts = newSectionStarts
     workerActive = true
     screen.setWorkerActive(true)
     reloading = false
