@@ -8,6 +8,7 @@ import {
 } from './render.js'
 import type { DisplayInfo } from '../clock-worker.js'
 import type { Track } from '../player.js'
+import { loadKeybindings, buildMuteMap, buildSoloMap } from '../core/keybindings.js'
 
 interface Layout {
   width: number
@@ -36,8 +37,9 @@ function padRight(s: string, width: number): string {
   return vl >= width ? s : s + ' '.repeat(width - vl)
 }
 
-const muteKeys: Record<string, number> = { '&': 1, 'é': 2, '"': 3, "'": 4, '(': 5, '-': 6, 'è': 7, 'à': 0 }
-const soloKeys: Record<string, number> = { '1': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '!': 1, '@': 2, '#': 3, '$': 4, '%': 5, '^': 6, '&': 7 }
+const KB = loadKeybindings()
+const muteKeys = buildMuteMap(KB)
+const soloKeys = buildSoloMap(KB)
 
 export class PlayerScreen {
   private layout!: Layout
@@ -333,7 +335,7 @@ export class PlayerScreen {
   }
 
   private drawKeyHints() {
-    this.writeAt(this.layout.keyHintRow, 2, renderKeyHints(), this.layout.leftWidth - 2)
+    this.writeAt(this.layout.keyHintRow, 2, renderKeyHints(KB), this.layout.leftWidth - 2)
   }
 
   private drawAll() {

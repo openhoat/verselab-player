@@ -1,6 +1,7 @@
 import chalk from 'chalk'
 import type { DisplayInfo } from '../clock-worker.js'
 import type { Track } from '../player.js'
+import type { KeyBindings } from '../core/keybindings.js'
 
 // ── Step grid ──
 
@@ -187,6 +188,8 @@ export function renderFrameBottom(leftW: number, rightW: number): string {
 
 // ── Key hints ──
 
-export function renderKeyHints(): string {
-  return `  Mute: &é"'(-èà   Solo: 1234567`
+export function renderKeyHints(kb: KeyBindings): string {
+  const muteStr = [...kb.mute, kb.muteAll].join('')
+  const soloStr = kb.solo.join('')
+  return `  Mute: ${muteStr}   Solo: ${soloStr}`
 }

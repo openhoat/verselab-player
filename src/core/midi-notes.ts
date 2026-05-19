@@ -46,3 +46,17 @@ export function isValidNoteValue(note: string | number): boolean {
   }
   return false
 }
+
+export const GM_DRUM_NOTES: Record<string, number> = {
+  kick: 36, bass_drum: 36,
+  rimshot: 37, rim: 37,
+  snare: 38,
+  clap: 39,
+  hihat: 42, hi_hat: 42, closed_hihat: 42, hh: 42,
+  open_hihat: 46, open_hh: 46,
+  low_tom: 45,
+  mid_tom: 48,
+  high_tom: 50,
+  crash: 49,
+  ride: 51,
+}

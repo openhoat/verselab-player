@@ -2,7 +2,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'fs'
 import { join, relative, basename, extname } from 'path'
 import { load as parseYaml } from 'js-yaml'
 import { resolveSound, type Section } from './sound-catalog.js'
-import { isValidNoteValue } from './core/midi-notes.js'
+import { isValidNoteValue, GM_DRUM_NOTES } from './core/midi-notes.js'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -15,12 +15,7 @@ export interface LintIssue {
   message: string
 }
 
-// Valid drum instrument names (from player.ts GM_DRUMS)
-const GM_DRUMS = new Set([
-  'kick', 'bass_drum', 'rimshot', 'rim', 'snare', 'clap',
-  'hihat', 'hi_hat', 'closed_hihat', 'hh', 'open_hihat', 'open_hh',
-  'low_tom', 'mid_tom', 'high_tom', 'crash', 'ride',
-])
+const GM_DRUMS = new Set(Object.keys(GM_DRUM_NOTES))
 
 // Meta fields to skip when identifying drum instrument patterns.
 // Modern format uses 'track', legacy uses 'channel'. Both include sound/category/steps.

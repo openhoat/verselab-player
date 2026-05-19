@@ -5,8 +5,8 @@ import { execSync, spawn, spawnSync, type ChildProcess } from 'child_process'
 import { Worker } from 'worker_threads'
 import { load as parseYaml } from 'js-yaml'
 import chalk from 'chalk'
-import { noteToMidi } from './core/midi-notes.js'
-import type { DisplayInfo, ScheduledEvent } from './clock-worker.ts'
+import { noteToMidi, GM_DRUM_NOTES as GM_DRUMS } from './core/midi-notes.js'
+import type { DisplayInfo, ScheduledEvent, WorkerOutboundMessage } from './clock-worker.ts'
 import { PlayerScreen } from './ui/screen.js'
 import { resolveSongPath } from './core/paths.js'
 import { printSongList } from './cli/list-songs.js'
@@ -14,20 +14,6 @@ import { printSongList } from './cli/list-songs.js'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
-// General MIDI drum note mapping
-const GM_DRUMS: Record<string, number> = {
-  kick: 36, bass_drum: 36,
-  rimshot: 37, rim: 37,
-  snare: 38,
-  clap: 39,
-  hihat: 42, hi_hat: 42, closed_hihat: 42, hh: 42,
-  open_hihat: 46, open_hh: 46,
-  low_tom: 45,
-  mid_tom: 48,
-  high_tom: 50,
-  crash: 49,
-  ride: 51,
-}
 
 const DEFAULT_DRUM_VEL: Record<string, number> = {
   kick: 100, bass_drum: 100,
@@ -608,7 +594,7 @@ async function main() {
   // Worker stopped/done handler (resolved by the current play cycle's Promise)
   let resolveStop: (() => void) | null = null
 
-  worker.on('message', (msg: any) => {
+  worker.on('message', (msg: WorkerOutboundMessage) => {
     if (msg.type === 'display') {
       screen.setDisplayInfo(msg.info)
     } else if (msg.type === 'stopped') {

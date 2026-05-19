@@ -7,6 +7,7 @@ import chalk from 'chalk'
 import ora from 'ora'
 import { buildSchedule, loadSongMeta, loadSequence, isTrackActive, type SectionDef } from './player.js'
 import { resolveSongPath } from './core/paths.js'
+import type { DisplayInfo, WorkerOutboundMessage } from './clock-worker.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -138,10 +139,10 @@ async function main() {
   })
 
   // Display position
-  let displayInfo: any = null
+  let displayInfo: DisplayInfo | null = null
   let resolveStop: (() => void) | null = null
 
-  worker.on('message', (msg: any) => {
+  worker.on('message', (msg: WorkerOutboundMessage) => {
     if (msg.type === 'display') {
       displayInfo = msg.info
     } else if (msg.type === 'stopped') {

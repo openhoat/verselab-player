@@ -133,7 +133,17 @@ function play(schedule: ScheduledEvent[], loopMs: number, loop: boolean, noClock
   parentPort!.postMessage({ type: 'stopped' })
 }
 
-parentPort!.on('message', (msg: any) => {
+type WorkerInboundMessage =
+  | { type: 'start'; portIndex: number; schedule: ScheduledEvent[]; loopMs: number; loop?: boolean; noClock?: boolean }
+  | { type: 'reload'; schedule: ScheduledEvent[]; loopMs: number; loop?: boolean; noClock?: boolean }
+
+export type WorkerOutboundMessage =
+  | { type: 'display'; info: DisplayInfo }
+  | { type: 'done' }
+  | { type: 'restarting' }
+  | { type: 'stopped' }
+
+parentPort!.on('message', (msg: WorkerInboundMessage) => {
   if (msg.type === 'start') {
     out.openPort(msg.portIndex)
     play(msg.schedule, msg.loopMs, msg.loop ?? true, msg.noClock ?? false)
