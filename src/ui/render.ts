@@ -9,7 +9,7 @@ const STEP_EMPTY = '·'
 const STEP_NOTE = '▪'
 const STEP_GHOST = '▫'
 const STEP_PLAYHEAD = '▸'
-const STEP_BEAT_SEP = '│'
+const STEP_BEAT_SEP = '╎'  // lighter than │ to distinguish inner separators from outer borders
 
 export function renderStepGrid(track: Track, displayInfo: DisplayInfo, gridWidth: number): string {
   const trackPos = displayInfo.step % track.steps
@@ -25,6 +25,7 @@ export function renderStepGrid(track: Track, displayInfo: DisplayInfo, gridWidth
   const pageStart = page * stepsPerPage
   const pageEnd = Math.min(pageStart + stepsPerPage - 1, track.steps - 1)
   const playheadCol = trackPos % stepsPerPage
+  const activeBeat = Math.floor(playheadCol / 4)
 
   // Build map of active steps on this page (1-based step → max velocity)
   const activeSteps = new Map<number, number>()
@@ -39,6 +40,7 @@ export function renderStepGrid(track: Track, displayInfo: DisplayInfo, gridWidth
   for (let i = 0; i <= pageEnd - pageStart; i++) {
     const step1 = pageStart + i + 1
     const isPlayhead = i === playheadCol
+    const inActiveBeat = Math.floor(i / 4) === activeBeat
     const vel = activeSteps.get(step1)
     const hasNote = vel !== undefined
 
@@ -49,15 +51,15 @@ export function renderStepGrid(track: Track, displayInfo: DisplayInfo, gridWidth
     } else if (hasNote && vel > 40) {
       cells.push(chalk.green(STEP_NOTE))
     } else if (hasNote) {
-      cells.push(chalk.dim(STEP_GHOST))
+      cells.push(inActiveBeat ? STEP_GHOST : chalk.dim(STEP_GHOST))
     } else {
-      cells.push(chalk.dim(STEP_EMPTY))
+      cells.push(inActiveBeat ? STEP_EMPTY : chalk.dim(STEP_EMPTY))
     }
   }
 
   while (cells.length < stepsPerPage) cells.push(' ')
 
-  // Group by 4, join with beat separators
+  // Group by 4, join with lighter inner separators; outer borders stay │
   const groups: string[] = []
   for (let g = 0; g < numGroups; g++) {
     groups.push(cells.slice(g * 4, g * 4 + 4).join(''))
@@ -115,9 +117,13 @@ export function renderTrackLabel(track: Track, control: Int32Array, displayInfo:
   let page = ''
   if (displayInfo) {
     const trackPos = displayInfo.step % track.steps
-    const pg = Math.floor(trackPos / stepsPerPage) + 1
     const total = Math.ceil(track.steps / stepsPerPage)
-    page = total > 1 ? chalk.dim(` pg ${pg}/${total}`) : ''
+    if (total > 1) {
+      const BAR_W = 4
+      const filled = Math.round((trackPos / track.steps) * BAR_W)
+      const bar = chalk.green('▓'.repeat(filled)) + chalk.dim('░'.repeat(BAR_W - filled))
+      page = ' ' + chalk.dim('▕') + bar + chalk.dim('▏')
+    }
   }
 
   return `  ${dot} ${ch}  ${name} ${key} ${clip}  ${steps}${page}`
