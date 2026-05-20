@@ -98,3 +98,8 @@ oneOf:
               type: number
               minimum: 0.1
               description: 'Duration in steps (default 1)'
+            sta:
+              type: integer
+              minimum: 0
+              maximum: 5
+              description: 'Start Time Adjustment (0-5 clocks within a step), matches MV-1 timing at 24 PPQN'
