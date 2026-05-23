@@ -172,7 +172,7 @@ async function main() {
   // Build schedule and play once
   const { schedule, loopMs } = buildSchedule(sections, bpm, trackState, hasExplicitTracks)
 
-  const controlBuffer = new SharedArrayBuffer(4)
+  const controlBuffer = new SharedArrayBuffer(12)
   const control = new Int32Array(controlBuffer)
   const worker = new Worker(resolve(__dirname, 'clock-worker-loader.cjs'), {
     workerData: { controlBuffer }
