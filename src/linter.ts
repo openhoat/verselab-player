@@ -20,7 +20,7 @@ const GM_DRUMS = new Set(Object.keys(GM_DRUM_NOTES))
 // Meta fields to skip when identifying drum instrument patterns.
 // Modern format uses 'track', legacy uses 'channel'. Both include sound/category/steps.
 const ALL_META = new Set([
-  'track', 'channel', 'sound', 'category', 'steps', 'transpose', 'notes', 'clip', 'sta',
+  'track', 'channel', 'sound', 'category', 'steps', 'transpose', 'notes', 'clip', 'sta', 'velocity_maps', 'velocity_map',
 ])
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -435,7 +435,7 @@ function lintDrumTrack(doc: any, _filePath: string, fileRel: string): LintIssue[
     }
 
     // Check for invalid characters
-    const invalidChars = stripped.split('').filter(c => !'xXgo.'.includes(c))
+    const invalidChars = stripped.split('').filter(c => !'xXgo.-'.includes(c))
     if (invalidChars.length > 0) {
       const unique = [...new Set(invalidChars)]
       issues.push(issue(fileRel, 'error', `instrument "${instrument}" pattern has invalid characters: ${unique.join(', ')}`))
