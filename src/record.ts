@@ -1,6 +1,7 @@
 import { existsSync, statSync } from 'fs'
 import { resolve, join, dirname } from 'path'
 import { fileURLToPath } from 'url'
+import { createRequire } from 'module'
 import { spawnSync } from 'child_process'
 import { Worker } from 'worker_threads'
 import chalk from 'chalk'
@@ -83,7 +84,7 @@ async function main() {
     process.exit(1)
   }
 
-  // Find MIDI output port
+  // Find MIDI output and input ports
   const activeSpinner = ora({ text: 'Connecting to MIDI…', indent: 2 }).start()
   const discoverScript = `const m=require('midi');const o=new m.Output();const r=[];for(let i=0;i<o.getPortCount();i++)r.push(o.getPortName(i));process.stdout.write(JSON.stringify(r));`
   const discovery = spawnSync(process.execPath, ['--eval', discoverScript], {
@@ -98,6 +99,16 @@ async function main() {
     activeSpinner.fail('No MIDI output found')
     process.exit(1)
   }
+
+  // Find MIDI input port
+  const discoverInputScript = `const m=require('midi');const i=new m.Input();const r=[];for(let j=0;j<i.getPortCount();j++)r.push(i.getPortName(j));process.stdout.write(JSON.stringify(r));`
+  const discoveryInput = spawnSync(process.execPath, ['--eval', discoverInputScript], {
+    cwd: resolve(__dirname, '..'),
+    encoding: 'utf-8',
+  })
+  const inputPortNames: string[] = discoveryInput.stdout ? JSON.parse(discoveryInput.stdout) : []
+  let inputPortIndex = inputPortNames.findIndex(n => n.toLowerCase().includes('mv-1'))
+
   activeSpinner.succeed(`${chalk.bold(portName)}`)
 
   console.log()
@@ -106,10 +117,19 @@ async function main() {
     console.log(`  ${chalk.green('●')}  ${chalk.dim(`ch${t.channel}`)}  ${t.name}  ${chalk.dim(`(${t.steps} steps)`)}`)
   }
   console.log()
-  console.log(`  ${chalk.red('⏺')}  ${chalk.bold('Record')} — press Record on the MV-1, then Enter to start`)
+  console.log(`  ${chalk.red('⏺')}  ${chalk.bold('Record')} — press Record/Play on the MV-1 or Enter on your keyboard to start`)
   console.log()
 
-  // Wait for Enter
+  // Set up MIDI input if available
+  let input: any = null
+  if (inputPortIndex >= 0) {
+    const require = createRequire(import.meta.url)
+    const midi = require('midi') as typeof import('midi')
+    input = new midi.Input()
+    input.ignoreTypes(false, true, true) // receive SysEx, ignore timecode/active sensing
+  }
+
+  // Wait for Enter or MIDI input
   if (process.stdin.isTTY) process.stdin.setRawMode(true)
   process.stdin.resume()
   process.stdin.setEncoding('utf8')
@@ -117,11 +137,32 @@ async function main() {
   await new Promise<void>(r => {
     const onKey = (key: string) => {
       if (key === '\r' || key === '\n') {
-        process.stdin.removeListener('data', onKey)
+        cleanup()
         r()
       }
     }
+
+    const onMidiMessage = (_deltaTime: number, message: number[]) => {
+      const status = message[0]
+      // Ignore MIDI Clock (0xF8) and Active Sensing (0xFE)
+      if (status !== 0xF8 && status !== 0xFE) {
+        cleanup()
+        r()
+      }
+    }
+
+    function cleanup() {
+      process.stdin.removeListener('data', onKey)
+      if (input) {
+        input.closePort()
+      }
+    }
+
     process.stdin.on('data', onKey)
+    if (input) {
+      input.on('message', onMidiMessage)
+      input.openPort(inputPortIndex)
+    }
   })
 
   // Build schedule and play once
