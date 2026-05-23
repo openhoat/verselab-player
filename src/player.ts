@@ -675,6 +675,7 @@ async function main() {
   let displayInfo: DisplayInfo | null = null
   let workerActive = false
   let reloading = false
+  let reloadPending = false
   let exiting = false
   let startTrigger: (() => void) | null = null
   let alsaProc: ChildProcess | null = null
@@ -698,9 +699,36 @@ async function main() {
       reloading = false
     } else if (msg.type === 'restarting') {
       // Worker reached cycle end and is restarting with new schedule
-      screen.clearMessage()
-      currentSectionName = ''
-      reloading = false
+      if (reloadPending) {
+        reloadPending = false
+        try {
+          // Full reload: re-read song.yml
+          if (songFile && existsSync(songFile)) {
+            const raw = parseYaml(readFileSync(songFile, 'utf-8')) as Record<string, unknown>
+            const meta = raw.meta as { bpm?: number } | undefined
+            if (meta?.bpm) bpm = meta.bpm
+            hasExplicitTracks = raw.tracks !== undefined
+            trackState = (raw.tracks as Record<string, boolean> | undefined) ?? {}
+          }
+          // Re-read section definitions and sequences
+          if (isDir) {
+            const { raw } = loadSongMeta(resolved)
+            const { sectionDefs, index } = loadSectionDefs(resolved, raw)
+            const arrangement = (raw.arrangement as (string | number)[]).map(String)
+            sections = buildSections(sectionDefs, arrangement, resolved, index)
+          }
+        } catch (err) {
+          screen.drawMessage(`  ${chalk.red('✕')}  Reload failed: ${err instanceof Error ? err.message : String(err)}`)
+        }
+        const { schedule, loopMs, sectionStarts: newSectionStarts } = buildSchedule(sections, bpm, trackState, hasExplicitTracks, cli.clock && !effectiveWait, gmMode)
+        sectionStarts = newSectionStarts
+        reloading = true
+        worker.postMessage({ type: 'reload', schedule, loopMs, loop: shouldLoop && !effectiveWait, noClock: !cli.clock || effectiveWait, stepMs: 60000 / (bpm * 4) })
+      } else {
+        screen.clearMessage()
+        currentSectionName = ''
+        reloading = false
+      }
     } else if (msg.type === 'done') {
       // Worker has sent allNotesOff and closed port — safe to exit
       workerActive = false
@@ -716,31 +744,9 @@ async function main() {
   let reloadTimer: ReturnType<typeof setTimeout> | null = null
   const triggerReload = () => {
     if (exiting) return
-    try {
-      // Full reload: re-read song.yml
-      if (songFile && existsSync(songFile)) {
-        const raw = parseYaml(readFileSync(songFile, 'utf-8')) as Record<string, unknown>
-        const meta = raw.meta as { bpm?: number } | undefined
-        if (meta?.bpm) bpm = meta.bpm
-        hasExplicitTracks = raw.tracks !== undefined
-        trackState = (raw.tracks as Record<string, boolean> | undefined) ?? {}
-      }
-      // Re-read section definitions and sequences
-      if (isDir) {
-        const { raw } = loadSongMeta(resolved)
-        const { sectionDefs, index } = loadSectionDefs(resolved, raw)
-        const arrangement = (raw.arrangement as (string | number)[]).map(String)
-        sections = buildSections(sectionDefs, arrangement, resolved, index)
-      }
-    } catch { return }
-
     screen.drawMessage(`  ${chalk.yellow('↻')}  Change detected, restarting at cycle end…`)
-
+    reloadPending = true
     if (workerActive) {
-      const { schedule, loopMs, sectionStarts: newSectionStarts } = buildSchedule(sections, bpm, trackState, hasExplicitTracks, cli.clock && !effectiveWait, gmMode)
-      sectionStarts = newSectionStarts
-      reloading = true
-      worker.postMessage({ type: 'reload', schedule, loopMs, loop: shouldLoop && !effectiveWait, noClock: !cli.clock || effectiveWait, stepMs: 60000 / (bpm * 4) })
       Atomics.store(control, 0, 3)
       Atomics.notify(control, 0)
     }
