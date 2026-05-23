@@ -748,26 +748,29 @@ async function main() {
 
   const watchers: FSWatcher[] = []
   if (cli.watch && isDir) {
-    // Recursively collect all .yml files in the song directory
-    const collectYamlFiles = (dir: string): string[] => {
-      const files: string[] = []
+    // Recursively collect all directories in the song directory (excluding hidden folders)
+    const collectDirs = (dir: string): string[] => {
+      const dirs: string[] = [dir]
       try {
         for (const f of readdirSync(dir)) {
+          if (f.startsWith('.')) continue
           const full = join(dir, f)
           if (statSync(full).isDirectory()) {
-            files.push(...collectYamlFiles(full))
-          } else if (f.endsWith('.yml') || f.endsWith('.yaml')) {
-            files.push(full)
+            dirs.push(...collectDirs(full))
           }
         }
       } catch {}
-      return files
+      return dirs
     }
-    for (const f of collectYamlFiles(resolved)) {
-      watchers.push(watch(f, () => {
-        if (reloadTimer) clearTimeout(reloadTimer)
-        reloadTimer = setTimeout(triggerReload, 100)
-      }))
+    for (const d of collectDirs(resolved)) {
+      try {
+        watchers.push(watch(d, (eventType, filename) => {
+          if (!filename || filename.endsWith('.yml') || filename.endsWith('.yaml')) {
+            if (reloadTimer) clearTimeout(reloadTimer)
+            reloadTimer = setTimeout(triggerReload, 100)
+          }
+        }))
+      } catch {}
     }
   }
 
