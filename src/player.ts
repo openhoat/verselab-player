@@ -380,7 +380,7 @@ function buildSections(
 }
 
 export function isTrackActive(track: Track, trackState: Record<string, boolean>, hasExplicitTracks: boolean): boolean {
-  const byChannel = trackState[String(track.channel)] ?? trackState[`ch${track.channel}`]
+  const byChannel = trackState[String(track.channel)]
   if (byChannel !== undefined) return byChannel
   const byName = trackState[track.name] ?? trackState[track.name.replace(/^\d+-/, '')]
   if (byName !== undefined) return byName
