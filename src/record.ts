@@ -2,7 +2,7 @@ import { existsSync, statSync } from 'fs'
 import { resolve, join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { createRequire } from 'module'
-import { spawnSync } from 'child_process'
+import { spawn, spawnSync, type ChildProcess } from 'child_process'
 import { Worker } from 'worker_threads'
 import chalk from 'chalk'
 import ora from 'ora'
@@ -120,13 +120,24 @@ async function main() {
   console.log(`  ${chalk.red('⏺')}  ${chalk.bold('Record')} — press Record/Play on the MV-1 or Enter on your keyboard to start`)
   console.log()
 
-  // Set up MIDI input if available
-  let input: any = null
+  // Set up MIDI trigger child process if available (avoid loading midi in main thread)
+  let triggerProc: ChildProcess | null = null
   if (inputPortIndex >= 0) {
-    const require = createRequire(import.meta.url)
-    const midi = require('midi') as typeof import('midi')
-    input = new midi.Input()
-    input.ignoreTypes(false, true, true) // receive SysEx, ignore timecode/active sensing
+    const triggerScript = `
+      const m = require('midi');
+      const i = new m.Input();
+      i.ignoreTypes(false, true, true);
+      i.on('message', (dT, msg) => {
+        if (msg[0] !== 0xF8 && msg[0] !== 0xFE) {
+          process.exit(0);
+        }
+      });
+      i.openPort(${inputPortIndex});
+      setInterval(() => {}, 1000);
+    `
+    triggerProc = spawn(process.execPath, ['--eval', triggerScript], {
+      cwd: resolve(__dirname, '..'),
+    })
   }
 
   // Wait for Enter or MIDI input
@@ -142,26 +153,19 @@ async function main() {
       }
     }
 
-    const onMidiMessage = (_deltaTime: number, message: number[]) => {
-      const status = message[0]
-      // Ignore MIDI Clock (0xF8) and Active Sensing (0xFE)
-      if (status !== 0xF8 && status !== 0xFE) {
-        cleanup()
-        r()
-      }
-    }
-
     function cleanup() {
       process.stdin.removeListener('data', onKey)
-      if (input) {
-        input.closePort()
+      if (triggerProc) {
+        triggerProc.kill()
       }
     }
 
     process.stdin.on('data', onKey)
-    if (input) {
-      input.on('message', onMidiMessage)
-      input.openPort(inputPortIndex)
+    if (triggerProc) {
+      triggerProc.on('exit', () => {
+        cleanup()
+        r()
+      })
     }
   })
 
