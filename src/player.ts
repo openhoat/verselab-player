@@ -58,7 +58,7 @@ export interface SectionDef {
 const GRID_VEL: Record<string, number> = { x: 0, X: 0, g: -20, o: -40 }
 
 
-function parsePattern(str: string, instrument: string): NoteEvent[] {
+function parsePattern(str: string, instrument: string, velocityMaps?: Record<string, Record<string, number>>): NoteEvent[] {
   const chars = str.replace(/[\s|]/g, '').split('')
   if (chars.length < 1 || chars.length > 128) {
     throw new Error(`Pattern for "${instrument}" must be 1–128 steps, got ${chars.length}`)
@@ -67,14 +67,36 @@ function parsePattern(str: string, instrument: string): NoteEvent[] {
   if (note === undefined) {
     throw new Error(`Unknown drum instrument: "${instrument}". Known: ${Object.keys(GM_DRUMS).join(', ')}`)
   }
-  const baseVel = DEFAULT_DRUM_VEL[instrument] ?? 100
+  
+  // Check for instrument-specific velocity mapping
+  const instVelMap = velocityMaps?.[instrument]
+  
+  // Check for global velocity mapping
+  const globalVelMap = (!velocityMaps) ? undefined : 
+    (Object.values(velocityMaps).every(v => typeof v === 'number') ? velocityMaps as unknown as Record<string, number> : undefined)
+  
   return chars
     .map((c, idx) => {
-      if (GRID_VEL[c] !== undefined) {
-        const vel = Math.max(1, Math.min(127, baseVel + GRID_VEL[c]))
-        return { step: idx + 1, note, velocity: vel }
+      let vel: number | undefined
+      
+      // Priority: instrument-specific -> global -> default char mapping -> fallback
+      if (instVelMap && c in instVelMap) {
+        vel = instVelMap[c]
+      } else if (globalVelMap && c in globalVelMap) {
+        vel = globalVelMap[c]
+      } else if (GRID_VEL[c] !== undefined) {
+        const baseVel = DEFAULT_DRUM_VEL[instrument] ?? 100
+        vel = Math.max(1, Math.min(127, baseVel + GRID_VEL[c]))
+      } else if (c !== '.' && c !== '-') {
+        // Unknown character but not a rest - treat as hit with default velocity
+        vel = DEFAULT_DRUM_VEL[instrument] ?? 100
+      } else {
+        // '.' or '-' means rest (velocity 0, no note event)
+        return null
       }
-      return null
+      
+      if (vel === 0) return null
+      return { step: idx + 1, note, velocity: vel }
     })
     .filter((e): e is NoteEvent => e !== null)
 }
@@ -123,10 +145,11 @@ function parseTracks(raw: Record<string, unknown>, aliases: Aliases): Track[] {
         return { name, channel, clip, steps, events, isDrum, sound, category, gmProgram }
       }
 
-      const DRUM_META = new Set(['channel', 'sound', 'category', 'steps', 'gm_program'])
+      const DRUM_META = new Set(['channel', 'sound', 'category', 'steps', 'gm_program', 'velocity_maps', 'velocity_map'])
+      const velocityMaps = (s.velocity_maps as Record<string, Record<string, number>> | undefined)
       const patternEntries = Object.entries(s).filter(([k]) => !DRUM_META.has(k))
       const events: NoteEvent[] = patternEntries
-        .flatMap(([instrument, pattern]) => parsePattern(pattern as string, instrument))
+        .flatMap(([instrument, pattern]) => parsePattern(pattern as string, instrument, velocityMaps))
       const maxPatternLen = Math.max(...patternEntries.map(([, p]) => (p as string).replace(/[\s|]/g, '').length))
       const steps = stepsOverride ?? maxPatternLen
       return { name, channel, clip, steps, events, isDrum: true, sound, category, gmProgram }
@@ -180,10 +203,11 @@ function loadTrackFile(filePath: string, trackName: string, aliases: Aliases, de
     return { name: trackName, channel, clip, steps, events, isDrum, sound, category, gmProgram }
   }
 
-  const TRACK_META = new Set(['track', 'sound', 'category', 'steps', 'transpose', 'notes', 'clip', 'gm_program'])
+  const TRACK_META = new Set(['track', 'sound', 'category', 'steps', 'transpose', 'notes', 'clip', 'gm_program', 'velocity_maps', 'velocity_map'])
+  const velocityMaps = (raw.velocity_maps as Record<string, Record<string, number>> | undefined)
   const patternEntries = Object.entries(raw).filter(([k]) => !TRACK_META.has(k))
   const events: NoteEvent[] = patternEntries
-    .flatMap(([instrument, pattern]) => parsePattern(pattern as string, instrument))
+    .flatMap(([instrument, pattern]) => parsePattern(pattern as string, instrument, velocityMaps))
   const maxPatternLen = Math.max(...patternEntries.map(([, p]) => (p as string).replace(/[\s|]/g, '').length))
   const steps = stepsOverride ?? maxPatternLen
   return { name: trackName, channel, clip, steps, events, isDrum: true, sound, category, gmProgram }

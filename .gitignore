@@ -1,3 +1,7 @@
 .idea/
+.opencode/
 dist/
 node_modules/
+songs/
+
+.envrc

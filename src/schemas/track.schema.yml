@@ -29,9 +29,34 @@ oneOf:
         minimum: 1
         maximum: 128
         description: 'Override loop length in steps (default: auto-detected from pattern length)'
+      velocity_maps:
+        oneOf:
+          - type: object
+            description: 'Velocity mapping per instrument (e.g. { kick: { X: 100, x: 60 }, hihat: { H: 100, h: 80 } })'
+            propertyNames:
+              pattern: '^(kick|snare|hihat|open_hihat|rimshot|clap|crash|ride|low_tom|mid_tom|high_tom)$'
+            additionalProperties:
+              type: object
+              description: 'Character to velocity mapping for this instrument'
+              propertyNames:
+                pattern: '^[^\\s]$'
+                maxLength: 1
+              additionalProperties:
+                type: integer
+                minimum: 0
+                maximum: 127
+          - type: object
+            description: 'Global velocity mapping for all instruments (e.g. { X: 100, x: 60 })'
+            propertyNames:
+              pattern: '^[^\\s]$'
+              maxLength: 1
+            additionalProperties:
+              type: integer
+              minimum: 0
+              maximum: 127
     additionalProperties:
       type: string
-      description: 'Step pattern (1-128 steps) — x = hit, . = rest, spaces optional. Known names: kick, snare, hihat, open_hihat, rimshot, clap, crash, ride, low_tom, mid_tom, high_tom'
+      description: 'Step pattern (1-128 steps) — uses velocity_maps. Spaces and | ignored. Characters not in velocity_maps are treated as rest. Known names: kick, snare, hihat, open_hihat, rimshot, clap, crash, ride, low_tom, mid_tom, high_tom'
   - title: 'Melodic track'
     type: object
     required: [notes]
@@ -102,4 +127,5 @@ oneOf:
               type: integer
               minimum: 0
               maximum: 5
-              description: 'Start Time Adjustment (0-5 clocks within a step), matches MV-1 timing at 24 PPQN'
+              default: 1
+              description: 'Start Time Adjustment (0-5 clocks within a step), matches MV-1 timing at 24 PPQN (default: 1)'
