@@ -123,7 +123,7 @@ function runLoop(schedule: ScheduledEvent[], loopMs: number, loop: boolean, step
         if (cmd === 0x90 && isMuted(muteCh)) { idx++; continue }
         const isClock = CLOCK_MSGS.has(evt.message[0])
         if (isClock) {
-          sendClock(evt.message)
+          if (!clockPrerollDone || !evt.firstLoopOnly) sendClock(evt.message)
           if (!noClockMode) send(evt.message)
         } else {
           send(evt.message)
@@ -157,6 +157,8 @@ function runLoop(schedule: ScheduledEvent[], loopMs: number, loop: boolean, step
 const CLOCKS_PER_STEP = 6
 const CLOCK_PREROLL_BARS = 2
 
+let clockPrerollDone = false
+
 function clockPreroll(stepMs: number) {
   const clockMs = stepMs / CLOCKS_PER_STEP
   const totalClocks = CLOCK_PREROLL_BARS * 16 * CLOCKS_PER_STEP
@@ -166,6 +168,8 @@ function clockPreroll(stepMs: number) {
     while (performance.now() < target) { /* spin */ }
     sendClock([0xF8])
   }
+  sendClock([0xFA])
+  clockPrerollDone = true
 }
 
 function closeClockPorts() {
