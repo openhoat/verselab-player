@@ -1,7 +1,10 @@
 .idea/
 .opencode/
 dist/
+lancedb/
+models/
 node_modules/
 songs/
 
 .envrc
+.mcp.json
