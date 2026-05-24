@@ -361,7 +361,7 @@ function parseArgs(argv: string[]): { path?: string; wait: boolean; clock: boole
     if (arg === '--help' || arg === '-h') { result.help = true; i++; continue }
     if (arg === '--wait' || arg === '-w') { result.wait = true; i++; continue }
     if (arg === '--clock') { result.clock = true; i++; continue }
-    if (arg === '--clock-port' && i + 1 < argv.length) { result.clockPorts.push(argv[++i]); result.clock = true; i++; continue }
+    if (arg === '--clock-port' && i + 1 < argv.length) { result.clockPorts.push(argv[++i]); i++; continue }
     if (arg === '--no-watch') { result.watch = false; i++; continue }
     if ((arg === '--port' || arg === '-p') && i + 1 < argv.length) { result.port = argv[++i]; i++; continue }
     if ((arg === '--seq' || arg === '-s') && i + 1 < argv.length) { result.seq = argv[++i]; i++; continue }
@@ -862,10 +862,10 @@ async function main() {
         const navMuteMask = sections[0].tracks.reduce((mask, t) =>
           isTrackActive(t, trackState, hasExplicitTracks) ? mask : mask | (1 << t.channel), 0)
         Atomics.store(control, 1, navMuteMask)
-        const { schedule, loopMs, sectionStarts: newSectionStarts } = buildSchedule(sections, bpm, trackState, hasExplicitTracks, cli.clock, gmMode)
+        const { schedule, loopMs, sectionStarts: newSectionStarts } = buildSchedule(sections, bpm, trackState, hasExplicitTracks, cli.clock || cli.clockPorts.length > 0, gmMode)
         sectionStarts = newSectionStarts
         reloading = true
-        worker.postMessage({ type: 'reload', schedule, loopMs, loop: shouldLoop && !effectiveWait, noClock: !cli.clock || (effectiveWait && clockPortIndices.length === 0), stepMs: 60000 / (bpm * 4) })
+        worker.postMessage({ type: 'reload', schedule, loopMs, loop: shouldLoop && !effectiveWait, noClock: !cli.clock || effectiveWait, stepMs: 60000 / (bpm * 4) })
         screen.clearMessage()
         currentSectionName = ''
       } else if (reloadPending) {
@@ -907,10 +907,10 @@ async function main() {
         const reloadMuteMask = sections[0].tracks.reduce((mask, t) =>
           isTrackActive(t, trackState, hasExplicitTracks) ? mask : mask | (1 << t.channel), 0)
         Atomics.store(control, 1, reloadMuteMask)
-        const { schedule, loopMs, sectionStarts: newSectionStarts } = buildSchedule(sections, bpm, trackState, hasExplicitTracks, cli.clock, gmMode)
+        const { schedule, loopMs, sectionStarts: newSectionStarts } = buildSchedule(sections, bpm, trackState, hasExplicitTracks, cli.clock || cli.clockPorts.length > 0, gmMode)
         sectionStarts = newSectionStarts
         reloading = true
-        worker.postMessage({ type: 'reload', schedule, loopMs, loop: shouldLoop && !effectiveWait, noClock: !cli.clock || (effectiveWait && clockPortIndices.length === 0), stepMs: 60000 / (bpm * 4) })
+        worker.postMessage({ type: 'reload', schedule, loopMs, loop: shouldLoop && !effectiveWait, noClock: !cli.clock || effectiveWait, stepMs: 60000 / (bpm * 4) })
         screen.clearMessage()
         currentSectionName = ''
       } else {
@@ -1023,7 +1023,7 @@ async function main() {
       sections = pendingSectionNav
       pendingSectionNav = null
     }
-    const { schedule, loopMs, sectionStarts: newSectionStarts } = buildSchedule(sections, bpm, trackState, hasExplicitTracks, cli.clock, gmMode)
+    const { schedule, loopMs, sectionStarts: newSectionStarts } = buildSchedule(sections, bpm, trackState, hasExplicitTracks, cli.clock || cli.clockPorts.length > 0, gmMode)
     sectionStarts = newSectionStarts
     workerActive = true
     screen.setWorkerActive(true)
@@ -1031,7 +1031,7 @@ async function main() {
 
     await new Promise<void>(r => {
       resolveStop = r
-      worker.postMessage({ type: 'start', portIndex, clockPortIndices, schedule, loopMs, loop: shouldLoop && !effectiveWait, noClock: !cli.clock || (effectiveWait && clockPortIndices.length === 0), stepMs: 60000 / (bpm * 4) })
+      worker.postMessage({ type: 'start', portIndex, clockPortIndices, schedule, loopMs, loop: shouldLoop && !effectiveWait, noClock: !cli.clock || effectiveWait, stepMs: 60000 / (bpm * 4) })
     })
 
     if (!effectiveWait) break
