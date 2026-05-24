@@ -154,6 +154,20 @@ function runLoop(schedule: ScheduledEvent[], loopMs: number, loop: boolean, step
   }
 }
 
+const CLOCKS_PER_STEP = 6
+const CLOCK_PREROLL_BARS = 2
+
+function clockPreroll(stepMs: number) {
+  const clockMs = stepMs / CLOCKS_PER_STEP
+  const totalClocks = CLOCK_PREROLL_BARS * 16 * CLOCKS_PER_STEP
+  const start = performance.now()
+  for (let c = 0; c < totalClocks; c++) {
+    const target = start + c * clockMs
+    while (performance.now() < target) { /* spin */ }
+    sendClock([0xF8])
+  }
+}
+
 function closeClockPorts() {
   // Small delay to let MIDI Stop flush before closing
   const deadline = performance.now() + 50
@@ -206,6 +220,9 @@ parentPort!.on('message', (msg: WorkerInboundMessage) => {
       const co = new midi.Output()
       co.openPort(idx)
       clockOuts.push(co)
+    }
+    if (clockOuts.length > 0 && msg.stepMs) {
+      clockPreroll(msg.stepMs)
     }
     play(msg.schedule, msg.loopMs, msg.loop ?? true, msg.noClock ?? false, msg.stepMs ?? 0, msg.startDelayMs ?? 0)
   } else if (msg.type === 'reload') {
