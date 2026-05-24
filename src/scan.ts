@@ -42,19 +42,21 @@ function showHelp(): void {
   console.log('Options:')
   console.log('  --bars <n>   Stop after N bars (default: 4)')
   console.log('  --bpm <n>    Tempo for song.yml (default: 120)')
+  console.log('  --overwrite     Overwrite existing track files (default: skip them)')
   console.log('  -v, --verbose   Show all incoming MIDI messages')
   console.log()
   console.log('Example:')
   console.log('  verselab-scan songs/holding-on-to-you 1 --bpm 65 --bars 4')
 }
 
-function parseArgs(argv: string[]): { path?: string; seq?: string; help: boolean; verbose: boolean; bpm: number; bars: number } {
-  const result: { path?: string; seq?: string; help: boolean; verbose: boolean; bpm: number; bars: number } = { help: false, verbose: false, bpm: 120, bars: 4 }
+function parseArgs(argv: string[]): { path?: string; seq?: string; help: boolean; verbose: boolean; bpm: number; bars: number; overwrite: boolean } {
+  const result: { path?: string; seq?: string; help: boolean; verbose: boolean; bpm: number; bars: number; overwrite: boolean } = { help: false, verbose: false, bpm: 120, bars: 4, overwrite: false }
   let i = 0
   while (i < argv.length) {
     const arg = argv[i]
     if (arg === '--help' || arg === '-h') { result.help = true; i++; continue }
     if (arg === '--verbose' || arg === '-v') { result.verbose = true; i++; continue }
+    if (arg === '--overwrite') { result.overwrite = true; i++; continue }
     if (arg === '--bpm') { result.bpm = parseInt(argv[++i], 10) || 120; i++; continue }
     if (arg === '--bars') { result.bars = parseInt(argv[++i], 10) || 4; i++; continue }
     if (!result.path) { result.path = arg; i++; continue }
@@ -148,14 +150,11 @@ async function main() {
   mkdirSync(seqDir, { recursive: true })
 
   // Check for existing track files
-  const existingFiles = readdirSync(seqDir).filter((f: string) => f.endsWith('.yml') && f !== 'chords.yml' && f !== 'aliases.yml')
-  if (existingFiles.length > 0) {
-    console.error(`${chalk.red('Error:')} sequence directory already has track files:`)
-    for (const f of existingFiles) {
-      console.error(`  ${f}`)
-    }
-    console.error('Remove them first or use a different sequence number.')
-    process.exit(1)
+  const existingFiles = new Set(readdirSync(seqDir).filter((f: string) => f.endsWith('.yml') && f !== 'chords.yml' && f !== 'aliases.yml'))
+  if (existingFiles.size > 0 && !cli.overwrite) {
+    console.log(`  ${chalk.dim('Existing tracks (will be kept):')} ${[...existingFiles].join(', ')}`)
+    console.log(`  ${chalk.dim('Use --overwrite to replace them')}`)
+    console.log()
   }
 
   // Find MIDI input port
@@ -275,17 +274,22 @@ async function main() {
       process.stdout.write('\n')
       const totalSteps = Math.floor(clockCount / CLOCKS_PER_STEP)
       const sortedChannels = [...channels.keys()].sort((a, b) => a - b)
+      let written = 0
       for (const ch of sortedChannels) {
         const raw = channels.get(ch)!.sort((a, b) => a.step - b.step)
         const notes = extendDurations(raw, totalSteps)
+        if (!cli.overwrite && existingFiles.has(`${ch}.yml`)) {
+          console.log(`  ${chalk.dim('⊘')}  ch${ch}  ${notes.length} notes  →  skipped (${ch}.yml exists)`)
+          continue
+        }
         writeTrackFile(seqDir, ch, notes, totalSteps)
         console.log(`  ${chalk.green('✔')}  ch${ch}  ${notes.length} notes  →  ${ch}.yml`)
+        written++
       }
 
       if (channels.size === 0) {
         console.log(`  ${chalk.yellow('⚠')}  No notes captured`)
-      } else {
-        // Write song.yml and section file
+      } else if (written > 0) {
         const bpm = detectedBpm || cli.bpm
         writeSongAndSections(resolved, cli.seq!, [...channels.keys()], bpm)
         console.log(`  ${chalk.green('✔')}  song.yml + section generated  ${chalk.dim(`(${bpm} BPM)`)}`)
@@ -329,15 +333,21 @@ async function main() {
         process.stdout.write('\n')
         const totalSteps = maxSteps
         const sortedChannels = [...channels.keys()].sort((a, b) => a - b)
+        let written = 0
         for (const ch of sortedChannels) {
           const raw = channels.get(ch)!.sort((a, b) => a.step - b.step)
           const notes = extendDurations(raw, totalSteps)
+          if (!cli.overwrite && existingFiles.has(`${ch}.yml`)) {
+            console.log(`  ${chalk.dim('⊘')}  ch${ch}  ${notes.length} notes  →  skipped (${ch}.yml exists)`)
+            continue
+          }
           writeTrackFile(seqDir, ch, notes, totalSteps)
           console.log(`  ${chalk.green('✔')}  ch${ch}  ${notes.length} notes  →  ${ch}.yml`)
+          written++
         }
         if (channels.size === 0) {
           console.log(`  ${chalk.yellow('⚠')}  No notes captured`)
-        } else {
+        } else if (written > 0) {
           const bpm = detectedBpm || cli.bpm
           writeSongAndSections(resolved, cli.seq!, [...channels.keys()], bpm)
           console.log(`  ${chalk.green('✔')}  song.yml + section generated  ${chalk.dim(`(${bpm} BPM)`)}`)
