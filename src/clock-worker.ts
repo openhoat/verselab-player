@@ -19,12 +19,22 @@ export interface ScheduledEvent {
   muteChannel?: number  // 1-indexed channel for mute check (original track channel, before GM remap)
   firstLoopOnly?: boolean
   display?: DisplayInfo
+  seqEnd?: boolean  // marks end of one sequence repeat — used for cycle-boundary section nav
 }
 
 const control = new Int32Array((workerData as { controlBuffer: SharedArrayBuffer }).controlBuffer)
 const out = new midi.Output()
+const clockOuts: InstanceType<typeof midi.Output>[] = []
 
 const send = (msg: number[]) => (out.sendMessage as (m: number[]) => void)(msg)
+
+const CLOCK_MSGS = new Set([0xFA, 0xF8, 0xFC])
+
+function sendClock(msg: number[]) {
+  for (const co of clockOuts) {
+    try { (co.sendMessage as (m: number[]) => void)(msg) } catch {}
+  }
+}
 
 let noClockMode = false
 
@@ -36,17 +46,19 @@ function allNotesOff() {
   if (!noClockMode) {
     try { send([0xFC]) } catch {}
   }
+  sendClock([0xFC])
   for (let ch = 0; ch < 16; ch++) {
     try { send([0xB0 | ch, 120, 0]) } catch {}
     try { send([0xB0 | ch, 123, 0]) } catch {}
   }
 }
 
-function runLoop(schedule: ScheduledEvent[], loopMs: number, loop: boolean, stepMs: number) {
-  let loopStart = performance.now()
+function runLoop(schedule: ScheduledEvent[], loopMs: number, loop: boolean, stepMs: number, startDelayMs = 0) {
+  let loopStart = performance.now() + startDelayMs
   let idx = 0
   let firstLoop = true
   let prevMuted = 0
+  let seqEndPending = false  // set when a seqEnd marker fires with ctrl=3 pending
 
   // Timing diagnostics: measure actual step lateness vs schedule
   const DIAG = process.env.VERSELAB_DIAG === '1'
@@ -99,11 +111,23 @@ function runLoop(schedule: ScheduledEvent[], loopMs: number, loop: boolean, step
     while (idx < schedule.length) {
       const evt = schedule[idx]
       if (evt.timeMs > t) break
+      if (evt.seqEnd) {
+        // Sequence boundary marker: if a section nav is pending, stop here (not at section end)
+        if (Atomics.load(control, 0) === 3) { seqEndPending = true; break }
+        idx++
+        continue
+      }
       if (evt.message && (!evt.firstLoopOnly || firstLoop)) {
         const cmd = evt.message[0] & 0xf0
         const muteCh = evt.muteChannel ?? ((evt.message[0] & 0x0f) + 1)
         if (cmd === 0x90 && isMuted(muteCh)) { idx++; continue }
-        send(evt.message)
+        const isClock = CLOCK_MSGS.has(evt.message[0])
+        if (isClock) {
+          sendClock(evt.message)
+          if (!noClockMode) send(evt.message)
+        } else {
+          send(evt.message)
+        }
       }
       if (DIAG && evt.message) {
         const late = t - evt.timeMs
@@ -114,6 +138,8 @@ function runLoop(schedule: ScheduledEvent[], loopMs: number, loop: boolean, step
       }
       idx++
     }
+
+    if (seqEndPending) break
 
     if (t >= loopMs) {
       if (DIAG) process.stderr.write(`[diag] loop maxLate=${maxLateMs.toFixed(2)}ms\n`)
@@ -128,26 +154,34 @@ function runLoop(schedule: ScheduledEvent[], loopMs: number, loop: boolean, step
   }
 }
 
-function play(schedule: ScheduledEvent[], loopMs: number, loop: boolean, noClock = false, stepMs = 0) {
+function closeClockPorts() {
+  // Small delay to let MIDI Stop flush before closing
+  const deadline = performance.now() + 50
+  while (performance.now() < deadline) { /* spin */ }
+  for (const co of clockOuts) { try { co.closePort() } catch {} }
+  clockOuts.length = 0
+}
+
+function play(schedule: ScheduledEvent[], loopMs: number, loop: boolean, noClock = false, stepMs = 0, startDelayMs = 0) {
   noClockMode = noClock
-  // If exit was requested while we were transitioning, don't start a new loop
   if (Atomics.load(control, 0) === 2) {
     out.closePort()
+    closeClockPorts()
     parentPort!.postMessage({ type: 'done' })
     return
   }
   Atomics.store(control, 0, 0)
-  runLoop(schedule, loopMs, loop, stepMs)
+  runLoop(schedule, loopMs, loop, stepMs, startDelayMs)
   allNotesOff()
 
   const ctrl = Atomics.load(control, 0)
   if (ctrl === 2) {
     out.closePort()
+    closeClockPorts()
     parentPort!.postMessage({ type: 'done' })
     return
   }
   if (ctrl === 3) {
-    // Cycle ended, reload data is queued in message port — yield to event loop
     parentPort!.postMessage({ type: 'restarting' })
     Atomics.store(control, 0, 0)
     return
@@ -156,7 +190,7 @@ function play(schedule: ScheduledEvent[], loopMs: number, loop: boolean, noClock
 }
 
 type WorkerInboundMessage =
-  | { type: 'start'; portIndex: number; schedule: ScheduledEvent[]; loopMs: number; loop?: boolean; noClock?: boolean; stepMs?: number }
+  | { type: 'start'; portIndex: number; clockPortIndices?: number[]; schedule: ScheduledEvent[]; loopMs: number; loop?: boolean; noClock?: boolean; stepMs?: number; startDelayMs?: number }
   | { type: 'reload'; schedule: ScheduledEvent[]; loopMs: number; loop?: boolean; noClock?: boolean; stepMs?: number }
 
 export type WorkerOutboundMessage =
@@ -168,7 +202,12 @@ export type WorkerOutboundMessage =
 parentPort!.on('message', (msg: WorkerInboundMessage) => {
   if (msg.type === 'start') {
     out.openPort(msg.portIndex)
-    play(msg.schedule, msg.loopMs, msg.loop ?? true, msg.noClock ?? false, msg.stepMs ?? 0)
+    for (const idx of msg.clockPortIndices ?? []) {
+      const co = new midi.Output()
+      co.openPort(idx)
+      clockOuts.push(co)
+    }
+    play(msg.schedule, msg.loopMs, msg.loop ?? true, msg.noClock ?? false, msg.stepMs ?? 0, msg.startDelayMs ?? 0)
   } else if (msg.type === 'reload') {
     // Schedule data arrives here after runLoop yields (ctrl=3 broke the loop)
     play(msg.schedule, msg.loopMs, msg.loop ?? true, msg.noClock ?? false, msg.stepMs ?? 0)

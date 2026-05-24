@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'fs'
-import { join, relative, basename, extname } from 'path'
+import { join, relative, basename, extname, dirname } from 'path'
 import { load as parseYaml } from 'js-yaml'
 import { resolveSound, type Section } from './sound-catalog.js'
 import { isValidNoteValue, GM_DRUM_NOTES } from './core/midi-notes.js'
@@ -20,7 +20,7 @@ const GM_DRUMS = new Set(Object.keys(GM_DRUM_NOTES))
 // Meta fields to skip when identifying drum instrument patterns.
 // Modern format uses 'track', legacy uses 'channel'. Both include sound/category/steps.
 const ALL_META = new Set([
-  'track', 'channel', 'sound', 'category', 'steps', 'transpose', 'notes', 'clip', 'sta', 'velocity_maps', 'velocity_map',
+  'track', 'channel', 'sound', 'category', 'steps', 'transpose', 'notes', 'roll', 'clip', 'sta', 'velocity_maps', 'custom',
 ])
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -247,24 +247,47 @@ export function lintSequence(seqDir: string): LintIssue[] {
     return issues
   }
 
-  // Load chords
+  // Load chords — walk up from seqDir, merge (deeper overrides shallower).
+  // Parent-level files are loaded silently; lintSongDir lints them once at song level.
   let chords: Record<string, any> = {}
-  let chordsFile = ''
+  let localChordsFile = ''
+  let localChords: Record<string, any> = {}
+
+  // Inherit from parent directories (up to 2 levels: sequences/N/ → sequences/ → song/)
+  {
+    let current = dirname(seqDir)
+    for (let i = 0; i < 2; i++) {
+      for (const name of ['chords.yml', 'aliases.yml']) {
+        const p = join(current, name)
+        if (existsSync(p)) {
+          try { Object.assign(chords, (parseYaml(readFileSync(p, 'utf-8')) ?? {}) as Record<string, any>) } catch {}
+          break
+        }
+      }
+      const parent = dirname(current)
+      if (parent === current) break
+      current = parent
+    }
+  }
+
+  // Sequence-level chords (override parent, linted here, orphan-checked)
   const chordsPath = join(seqDir, 'chords.yml')
   const aliasesPath = join(seqDir, 'aliases.yml')
   if (existsSync(chordsPath)) {
-    chordsFile = chordsPath
+    localChordsFile = chordsPath
     try {
-      chords = (parseYaml(readFileSync(chordsPath, 'utf-8')) ?? {}) as Record<string, any>
-      issues.push(...lintChords(chordsPath, chords))
+      localChords = (parseYaml(readFileSync(chordsPath, 'utf-8')) ?? {}) as Record<string, any>
+      issues.push(...lintChords(chordsPath, localChords))
+      Object.assign(chords, localChords)
     } catch (e: any) {
       issues.push(issue(rel(chordsPath), 'error', `YAML parse error: ${e.message}`))
     }
   } else if (existsSync(aliasesPath)) {
-    chordsFile = aliasesPath
+    localChordsFile = aliasesPath
     try {
-      chords = (parseYaml(readFileSync(aliasesPath, 'utf-8')) ?? {}) as Record<string, any>
-      issues.push(...lintChords(aliasesPath, chords))
+      localChords = (parseYaml(readFileSync(aliasesPath, 'utf-8')) ?? {}) as Record<string, any>
+      issues.push(...lintChords(aliasesPath, localChords))
+      Object.assign(chords, localChords)
     } catch (e: any) {
       issues.push(issue(rel(aliasesPath), 'error', `YAML parse error: ${e.message}`))
     }
@@ -280,10 +303,10 @@ export function lintSequence(seqDir: string): LintIssue[] {
     issues.push(...trackIssues)
   }
 
-  // Check for orphan chords (defined but never referenced)
-  for (const chordName of Object.keys(chords)) {
+  // Orphan check only for sequence-level chords (parent chords may be used in other sequences)
+  for (const chordName of Object.keys(localChords)) {
     if (!referencedChords.has(chordName)) {
-      issues.push(issue(rel(chordsFile), 'style', `chord "${chordName}" is defined but never referenced in any track`))
+      issues.push(issue(rel(localChordsFile), 'style', `chord "${chordName}" is defined but never referenced in any track`))
     }
   }
 
@@ -333,7 +356,7 @@ export function lintTrack(filePath: string, chords?: Record<string, any>, refere
     return issues
   }
 
-  const isDrumTrack = !Array.isArray(doc.notes)
+  const isDrumTrack = !Array.isArray(doc.notes) && !Array.isArray(doc.roll)
   const fileName = basename(filePath, extname(filePath))
   const filePrefix = fileName.match(/^(\d+)-/)
 
@@ -459,15 +482,21 @@ function lintDrumTrack(doc: any, _filePath: string, fileRel: string): LintIssue[
 
 // ─── Lint melodic track content ──────────────────────────────────────────────
 
+const ROLL_NOTE_RE = /^[A-Ga-g][#b]?-?[0-9]+$/
+
 function lintMelodicTrack(doc: any, _filePath: string, fileRel: string, chords?: Record<string, any>, referencedChords?: Set<string>): LintIssue[] {
   const issues: LintIssue[] = []
 
+  if (Array.isArray(doc.roll)) {
+    return lintRollTrack(doc, fileRel, chords, referencedChords)
+  }
+
   if (!Array.isArray(doc.notes) || doc.notes.length === 0) {
-    issues.push(issue(fileRel, 'error', 'melodic track must have a non-empty "notes" array'))
+    issues.push(issue(fileRel, 'error', 'melodic track must have a non-empty "notes" or "roll" array'))
     return issues
   }
 
-  const seenSteps = new Map<number, number>() // step → line index (0-based)
+  const seenSteps = new Map<number, number>() // step → first index (0-based)
 
   for (let i = 0; i < doc.notes.length; i++) {
     const n = doc.notes[i]
@@ -522,10 +551,92 @@ function lintMelodicTrack(doc: any, _filePath: string, fileRel: string, chords?:
         }
         referencedChords?.add(n.chord)
       } else {
-        // No chords file — will be caught at sequence level
         issues.push(issue(fileRel, 'warning', `${prefix}: chord "${n.chord}" referenced but no chords.yml found in this sequence`))
         referencedChords?.add(n.chord)
       }
+    }
+  }
+
+  return issues
+}
+
+function lintRollTrack(doc: any, fileRel: string, chords?: Record<string, any>, referencedChords?: Set<string>): LintIssue[] {
+  const issues: LintIssue[] = []
+  const roll = doc.roll as any[]
+
+  if (roll.length === 0) {
+    issues.push(issue(fileRel, 'error', 'roll array must be non-empty'))
+    return issues
+  }
+
+  // Lint custom map
+  const custom = doc.custom
+  if (custom !== undefined) {
+    if (typeof custom !== 'object' || Array.isArray(custom)) {
+      issues.push(issue(fileRel, 'error', 'custom must be a mapping'))
+    } else {
+      for (const [key, value] of Object.entries(custom)) {
+        if (key.length !== 1 || /[\s|.=]/.test(key)) {
+          issues.push(issue(fileRel, 'error', `custom key "${key}" must be a single non-separator character`))
+        }
+        if (typeof value === 'number') {
+          if (value < 0 || value > 127) issues.push(issue(fileRel, 'error', `custom["${key}"]: velocity must be 0-127`))
+        } else if (typeof value === 'string') {
+          if (!/^\d+(\(\d+\))?$/.test(value)) issues.push(issue(fileRel, 'error', `custom["${key}"]: invalid format "${value}" (expected "80" or "80(2)")`))
+        } else if (typeof value === 'object' && value !== null) {
+          const obj = value as any
+          if (typeof obj.vel !== 'number') issues.push(issue(fileRel, 'error', `custom["${key}"].vel must be a number`))
+        } else {
+          issues.push(issue(fileRel, 'error', `custom["${key}"]: unsupported value type ${typeof value}`))
+        }
+      }
+    }
+  }
+
+  let patternLen: number | null = null
+
+  for (let i = 0; i < roll.length; i++) {
+    const item = roll[i]
+    const prefix = `roll[${i}]`
+
+    if (typeof item !== 'object' || Array.isArray(item) || item === null) {
+      issues.push(issue(fileRel, 'error', `${prefix}: each roll item must be a mapping`))
+      continue
+    }
+    const entries = Object.entries(item)
+    if (entries.length !== 1) {
+      issues.push(issue(fileRel, 'error', `${prefix}: each roll item must have exactly one key, got ${entries.length}`))
+      continue
+    }
+    const [key, pattern] = entries[0]
+    const isNote = ROLL_NOTE_RE.test(key)
+    const isChord = !isNote && typeof key === 'string'
+    if (isChord) {
+      if (chords && !(key in chords)) {
+        issues.push(issue(fileRel, 'error', `${prefix}: unknown chord "${key}"`))
+      } else if (!chords) {
+        issues.push(issue(fileRel, 'warning', `${prefix}: chord "${key}" referenced but no chords.yml found in this sequence`))
+      }
+      referencedChords?.add(key)
+    } else if (!isNote) {
+      issues.push(issue(fileRel, 'error', `${prefix}: invalid note name "${key}"`))
+    }
+    if (typeof pattern !== 'string') {
+      issues.push(issue(fileRel, 'error', `${prefix}: pattern must be a string, got ${typeof pattern}`))
+      continue
+    }
+    const stripped = pattern.replace(/[\s|]/g, '')
+    if (stripped.length === 0) {
+      issues.push(issue(fileRel, 'warning', `${prefix}: pattern is empty`))
+      continue
+    }
+    if (stripped.length > 128) {
+      issues.push(issue(fileRel, 'error', `${prefix}: pattern has ${stripped.length} steps (max 128)`))
+    }
+    if (patternLen === null) {
+      patternLen = stripped.length
+    } else if (stripped.length !== patternLen) {
+      issues.push(issue(fileRel, 'warning', `${prefix}: pattern has ${stripped.length} steps, expected ${patternLen}`))
     }
   }
 
@@ -539,6 +650,20 @@ export function lintSongDir(songDir: string): LintIssue[] {
 
   // Lint song.yml
   issues.push(...lintSong(songDir))
+
+  // Lint song-level chords.yml / aliases.yml if present
+  for (const name of ['chords.yml', 'aliases.yml']) {
+    const p = join(songDir, name)
+    if (existsSync(p)) {
+      try {
+        const songChords = (parseYaml(readFileSync(p, 'utf-8')) ?? {}) as Record<string, any>
+        issues.push(...lintChords(p, songChords))
+      } catch (e: any) {
+        issues.push(issue(rel(p), 'error', `YAML parse error: ${e.message}`))
+      }
+      break
+    }
+  }
 
   // Lint section files if sections/ directory exists
   const sectionsDir = join(songDir, 'sections')
