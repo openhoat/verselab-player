@@ -340,6 +340,7 @@ function showHelp(): void {
   console.log('  -h, --help             Show this help message')
   console.log('  -w, --wait             Wait for MV-1 START before playing; STOP pauses and re-arms')
   console.log('  --clock                Send MIDI Start/Clock (sync MV-1 sequencer)')
+  console.log('  --clock-port <name>    Send MIDI clock to additional port (repeatable, e.g. --clock-port rc-505)')
   console.log('  -p, --port <name>      MIDI output port name pattern (default: mv-1, fallback: first port)')
   console.log('  -t, --track <spec>     Only play track matching channel, name, or prefix')
   console.log('  --no-watch             Disable file watching / hot-reload')
@@ -352,14 +353,15 @@ function showHelp(): void {
   console.log('    bass: false')
 }
 
-function parseArgs(argv: string[]): { path?: string; wait: boolean; clock: boolean; watch: boolean; port?: string; track?: string; seq?: string; section?: string; help: boolean } {
-  const result: { path?: string; wait: boolean; clock: boolean; watch: boolean; port?: string; track?: string; seq?: string; section?: string; help: boolean } = { wait: false, clock: false, watch: true, help: false }
+function parseArgs(argv: string[]): { path?: string; wait: boolean; clock: boolean; clockPorts: string[]; watch: boolean; port?: string; track?: string; seq?: string; section?: string; help: boolean } {
+  const result: { path?: string; wait: boolean; clock: boolean; clockPorts: string[]; watch: boolean; port?: string; track?: string; seq?: string; section?: string; help: boolean } = { wait: false, clock: false, clockPorts: [], watch: true, help: false }
   let i = 0
   while (i < argv.length) {
     const arg = argv[i]
     if (arg === '--help' || arg === '-h') { result.help = true; i++; continue }
     if (arg === '--wait' || arg === '-w') { result.wait = true; i++; continue }
     if (arg === '--clock') { result.clock = true; i++; continue }
+    if (arg === '--clock-port' && i + 1 < argv.length) { result.clockPorts.push(argv[++i]); result.clock = true; i++; continue }
     if (arg === '--no-watch') { result.watch = false; i++; continue }
     if ((arg === '--port' || arg === '-p') && i + 1 < argv.length) { result.port = argv[++i]; i++; continue }
     if ((arg === '--seq' || arg === '-s') && i + 1 < argv.length) { result.seq = argv[++i]; i++; continue }
@@ -718,6 +720,20 @@ async function main() {
   const portName = portNames[portIndex]
   const gmMode = !portName.toLowerCase().includes('mv-1')
 
+  // Resolve additional clock ports
+  const clockPortIndices: number[] = []
+  for (const pattern of cli.clockPorts) {
+    const idx = portNames.findIndex((n, i) => i !== portIndex && n.toLowerCase().includes(pattern.toLowerCase()))
+    if (idx < 0) {
+      console.error(chalk.red('✕') + `  Clock port "${pattern}" not found. Available: ${portNames.filter((_, i) => i !== portIndex).join(', ') || 'none'}`)
+      process.exit(1)
+    }
+    if (!clockPortIndices.includes(idx)) {
+      clockPortIndices.push(idx)
+      console.log(chalk.green('✔') + `  Clock → ${portNames[idx]}`)
+    }
+  }
+
   const alsaPort = cli.wait ? findAlsaSeqPort('mv-1') : null
   const effectiveWait = cli.wait && !!alsaPort
   const isSongMode = isDir && !cli.seq && !cli.section
@@ -1015,7 +1031,7 @@ async function main() {
 
     await new Promise<void>(r => {
       resolveStop = r
-      worker.postMessage({ type: 'start', portIndex, schedule, loopMs, loop: shouldLoop && !effectiveWait, noClock: !cli.clock || effectiveWait, stepMs: 60000 / (bpm * 4) })
+      worker.postMessage({ type: 'start', portIndex, clockPortIndices, schedule, loopMs, loop: shouldLoop && !effectiveWait, noClock: !cli.clock || effectiveWait, stepMs: 60000 / (bpm * 4) })
     })
 
     if (!effectiveWait) break
