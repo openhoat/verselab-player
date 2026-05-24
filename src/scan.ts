@@ -265,7 +265,7 @@ async function main() {
           note: midiToNote(pending.note),
           vel: pending.velocity,
           dur: 1,
-          ...(sta ? { sta } : {}),
+          ...(sta && sta !== 1 ? { sta } : {}),
         })
       }
       pendingNotes.clear()
@@ -326,7 +326,7 @@ async function main() {
             note: midiToNote(pending.note),
             vel: pending.velocity,
             dur: 1,
-            ...(sta ? { sta } : {}),
+            ...(sta && sta !== 1 ? { sta } : {}),
           })
         }
         pendingNotes.clear()
@@ -380,7 +380,7 @@ async function main() {
           note: midiToNote(pending.note),
           vel: pending.velocity,
           dur,
-          ...(sta ? { sta } : {}),
+          ...(sta && sta !== 1 ? { sta } : {}),
         })
       }
       pendingNotes.set(key, { note: data1, velocity: data2, clockOn: clockCount })
@@ -400,7 +400,7 @@ async function main() {
           note: midiToNote(pending.note),
           vel: pending.velocity,
           dur,
-          ...(sta ? { sta } : {}),
+          ...(sta && sta !== 1 ? { sta } : {}),
         })
       }
     }
