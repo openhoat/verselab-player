@@ -5,7 +5,7 @@ import { execSync, spawn, spawnSync, type ChildProcess } from 'child_process'
 import { Worker } from 'worker_threads'
 import { load as parseYaml } from 'js-yaml'
 import chalk from 'chalk'
-import { noteToMidi, GM_DRUM_NOTES as GM_DRUMS } from './core/midi-notes.js'
+import { noteToMidi, isValidNoteName, GM_DRUM_NOTES as GM_DRUMS } from './core/midi-notes.js'
 import { DRUM_CATEGORIES, resolveGmProgram } from './core/gm-map.js'
 import type { DisplayInfo, ScheduledEvent, WorkerOutboundMessage } from './clock-worker.ts'
 import { PlayerScreen } from './ui/screen.js'
@@ -55,8 +55,66 @@ export interface SectionDef {
   source?: string
 }
 
-const GRID_VEL: Record<string, number> = { x: 0, X: 0, g: -20, o: -40 }
+const GRID_VEL: Record<string, number> = { X: 0, x: 0, '.': -50, g: -20, o: -40 }
 
+
+/** Parse a custom value: number, "80(2)" string (vel + optional sta), or {vel, sta} object */
+function parseVelocityEntry(value: unknown): { vel: number; sta: number } {
+  if (typeof value === 'number') return { vel: value, sta: 0 }
+  if (typeof value === 'string') {
+    const m = value.match(/^(\d+)(?:\((\d+)\))?$/)
+    if (m) return { vel: parseInt(m[1], 10), sta: m[2] ? parseInt(m[2], 10) : 0 }
+  }
+  if (typeof value === 'object' && value !== null) {
+    const obj = value as Record<string, number>
+    return { vel: obj.vel ?? 100, sta: obj.sta ?? 0 }
+  }
+  return { vel: 100, sta: 0 }
+}
+
+/**
+ * Parse the roll: format for melodic tracks.
+ * Items: array of single-key maps [{NOTE: PATTERN}, ...]
+ * Pattern chars (excluding | and spaces): . = rest, = = sustain, else = custom key
+ * custom values: number, "80(2)" (vel + sta), or {vel, sta}
+ */
+function parseRoll(
+  items: Record<string, string>[],
+  velocityMap: Record<string, unknown>,
+  transpose: number,
+  aliases: Aliases = {},
+): NoteEvent[] {
+  const events: NoteEvent[] = []
+  for (const item of items) {
+    const entries = Object.entries(item)
+    if (entries.length !== 1) continue
+    const [key, pattern] = entries[0]
+    const midiNotes: number[] = isValidNoteName(key)
+      ? [Math.min(127, Math.max(0, noteToMidi(key) + transpose))]
+      : (aliases[key] ?? []).map(n => Math.min(127, Math.max(0, noteToMidi(n) + transpose)))
+    if (midiNotes.length === 0) throw new Error(`Unknown chord alias in roll: "${key}"`)
+    const chars = pattern.replace(/[\s|]/g, '').split('')
+    for (let i = 0; i < chars.length; i++) {
+      const c = chars[i]
+      if (c === '.' || c === '=') continue
+      if (!(c in velocityMap)) continue
+      const entry = parseVelocityEntry(velocityMap[c])
+      if (entry.vel === 0) continue
+      let dur = 1
+      while (i + dur < chars.length && chars[i + dur] === '=') dur++
+      for (const midi of midiNotes) {
+        events.push({
+          step: i + 1,
+          note: midi,
+          velocity: entry.vel,
+          duration: dur,
+          ...(entry.sta ? { sta: entry.sta } : {}),
+        })
+      }
+    }
+  }
+  return events
+}
 
 function parsePattern(str: string, instrument: string, velocityMaps?: Record<string, Record<string, number>>): NoteEvent[] {
   const chars = str.replace(/[\s|]/g, '').split('')
@@ -68,31 +126,29 @@ function parsePattern(str: string, instrument: string, velocityMaps?: Record<str
     throw new Error(`Unknown drum instrument: "${instrument}". Known: ${Object.keys(GM_DRUMS).join(', ')}`)
   }
   
-  // Check for instrument-specific velocity mapping
   const instVelMap = velocityMaps?.[instrument]
-  
-  // Check for global velocity mapping
-  const globalVelMap = (!velocityMaps) ? undefined : 
+  const defaultVelMap = velocityMaps?.['default'] as Record<string, number> | undefined
+  const globalVelMap = (!velocityMaps) ? undefined :
     (Object.values(velocityMaps).every(v => typeof v === 'number') ? velocityMaps as unknown as Record<string, number> : undefined)
-  
+
   return chars
     .map((c, idx) => {
       let vel: number | undefined
-      
-      // Priority: instrument-specific -> global -> default char mapping -> fallback
+
       if (instVelMap && c in instVelMap) {
         vel = instVelMap[c]
+      } else if (defaultVelMap && c in defaultVelMap) {
+        vel = defaultVelMap[c]
       } else if (globalVelMap && c in globalVelMap) {
         vel = globalVelMap[c]
       } else if (GRID_VEL[c] !== undefined) {
         const baseVel = DEFAULT_DRUM_VEL[instrument] ?? 100
         vel = Math.max(1, Math.min(127, baseVel + GRID_VEL[c]))
-      } else if (c !== '.' && c !== '-') {
+      } else if (c !== '-') {
         // Unknown character but not a rest - treat as hit with default velocity
         vel = DEFAULT_DRUM_VEL[instrument] ?? 100
       } else {
-        // '.' or '-' means rest (velocity 0, no note event)
-        return null
+        return null  // '-' is the rest character
       }
       
       if (vel === 0) return null
@@ -145,7 +201,7 @@ function parseTracks(raw: Record<string, unknown>, aliases: Aliases): Track[] {
         return { name, channel, clip, steps, events, isDrum, sound, category, gmProgram }
       }
 
-      const DRUM_META = new Set(['channel', 'sound', 'category', 'steps', 'gm_program', 'velocity_maps', 'velocity_map'])
+      const DRUM_META = new Set(['channel', 'sound', 'category', 'steps', 'gm_program', 'velocity_maps', 'custom'])
       const velocityMaps = (s.velocity_maps as Record<string, Record<string, number>> | undefined)
       const patternEntries = Object.entries(s).filter(([k]) => !DRUM_META.has(k))
       const events: NoteEvent[] = patternEntries
@@ -157,15 +213,22 @@ function parseTracks(raw: Record<string, unknown>, aliases: Aliases): Track[] {
 }
 
 function loadAliases(dir: string): Aliases {
-  const chordsFile = join(dir, 'chords.yml')
-  const aliasesFile = join(dir, 'aliases.yml')
-  if (existsSync(chordsFile)) {
-    return (parseYaml(readFileSync(chordsFile, 'utf-8')) ?? {}) as Aliases
+  // Walk up from dir (up to 3 levels), merge — deeper overrides shallower
+  const levels: Aliases[] = []
+  let current = dir
+  for (let i = 0; i < 3; i++) {
+    const chordsFile = join(current, 'chords.yml')
+    const aliasesFile = join(current, 'aliases.yml')
+    if (existsSync(chordsFile)) {
+      levels.unshift((parseYaml(readFileSync(chordsFile, 'utf-8')) ?? {}) as Aliases)
+    } else if (existsSync(aliasesFile)) {
+      levels.unshift((parseYaml(readFileSync(aliasesFile, 'utf-8')) ?? {}) as Aliases)
+    }
+    const parent = dirname(current)
+    if (parent === current) break
+    current = parent
   }
-  if (existsSync(aliasesFile)) {
-    return (parseYaml(readFileSync(aliasesFile, 'utf-8')) ?? {}) as Aliases
-  }
-  return {}
+  return Object.assign({}, ...levels)
 }
 
 /** Extract leading number from a filename like "4-drums" → 4, "5" → 5, or "drums" → undefined */
@@ -203,7 +266,21 @@ function loadTrackFile(filePath: string, trackName: string, aliases: Aliases, de
     return { name: trackName, channel, clip, steps, events, isDrum, sound, category, gmProgram }
   }
 
-  const TRACK_META = new Set(['track', 'sound', 'category', 'steps', 'transpose', 'notes', 'clip', 'gm_program', 'velocity_maps', 'velocity_map'])
+  if (Array.isArray(raw.roll)) {
+    const transpose = (raw.transpose as number | undefined) ?? 0
+    const velocityMap = (raw.custom as Record<string, unknown> | undefined) ?? {}
+    const items = raw.roll as Record<string, string>[]
+    const events = parseRoll(items, velocityMap, transpose, aliases)
+    const maxPatternLen = items.reduce((max, item) => {
+      const [, pattern] = Object.entries(item)[0] ?? ['', '']
+      return Math.max(max, pattern.replace(/[\s|]/g, '').length)
+    }, 0)
+    const steps = stepsOverride ?? maxPatternLen
+    const isDrum = category !== undefined && DRUM_CATEGORIES.has(category)
+    return { name: trackName, channel, clip, steps, events, isDrum, sound, category, gmProgram }
+  }
+
+  const TRACK_META = new Set(['track', 'sound', 'category', 'steps', 'transpose', 'notes', 'roll', 'clip', 'gm_program', 'velocity_maps', 'custom'])
   const velocityMaps = (raw.velocity_maps as Record<string, Record<string, number>> | undefined)
   const patternEntries = Object.entries(raw).filter(([k]) => !TRACK_META.has(k))
   const events: NoteEvent[] = patternEntries
@@ -224,15 +301,15 @@ function loadSequenceDir(seqDir: string, aliases: Aliases, defaultClip?: number)
 }
 
 export function loadSequence(seqPath: string): Track[] {
-  try {
-    if (statSync(seqPath).isDirectory()) {
-      const aliases = loadAliases(seqPath)
-      // Derive default clip from sequence directory name (e.g. sequences/2/ → clip 2)
-      const seqNum = parseInt(basename(seqPath), 10)
-      const defaultClip = isNaN(seqNum) ? undefined : seqNum
-      return loadSequenceDir(seqPath, aliases, defaultClip)
-    }
-  } catch {}
+  let isDir = false
+  try { isDir = statSync(seqPath).isDirectory() } catch {}
+  if (isDir) {
+    const aliases = loadAliases(seqPath)
+    // Derive default clip from sequence directory name (e.g. sequences/2/ → clip 2)
+    const seqNum = parseInt(basename(seqPath), 10)
+    const defaultClip = isNaN(seqNum) ? undefined : seqNum
+    return loadSequenceDir(seqPath, aliases, defaultClip)
+  }
   const file = extname(seqPath) === '' ? `${seqPath}.yml` : seqPath
   const raw = parseYaml(readFileSync(file, 'utf-8')) as Record<string, unknown>
   const aliases = (raw.aliases ?? {}) as Aliases
@@ -437,7 +514,6 @@ export function buildSchedule(
   // Initial program change before playback starts (preroll period, first loop only).
   const firstSection = sections[0]
   for (const track of firstSection.tracks) {
-    if (!isTrackActive(track, trackState, hasExplicitTracks)) continue
     const ch = trackCh(track)
     const pc = trackPc(track)
     if (pc === null) continue
@@ -479,7 +555,6 @@ export function buildSchedule(
       const advanceMs = SECTION_ADVANCE_STEPS * stepMs
       const pcTime = Math.max(0, t - advanceMs)
       for (const track of section.tracks) {
-        if (!isTrackActive(track, trackState, hasExplicitTracks)) continue
         const ch = trackCh(track)
         const pc = trackPc(track)
         if (pc === null) continue
@@ -501,7 +576,6 @@ export function buildSchedule(
     })
 
     for (const track of section.tracks) {
-      if (!isTrackActive(track, trackState, hasExplicitTracks)) continue
       const pos = ((step - 1) % track.steps) + 1
       const ch = trackCh(track)
       for (const evt of track.events) {
@@ -510,6 +584,26 @@ export function buildSchedule(
         const mc = track.channel
         events.push({ timeMs: t + staOffset, message: [0x90 | ch, evt.note, evt.velocity], muteChannel: mc })
         events.push({ timeMs: t + staOffset + (evt.duration ?? 1) * stepMs * 0.9, message: [0x80 | ch, evt.note, 0], muteChannel: mc })
+      }
+    }
+  }
+
+  // seqEnd markers: allow the worker to break at sequence-repeat boundaries, not just section end
+  {
+    let stepOffset = 0
+    for (let si = 0; si < sections.length; si++) {
+      const section = sections[si]
+      const activeTracks = section.tracks.filter(t => isTrackActive(t, trackState, hasExplicitTracks))
+      const globalSteps = activeTracks.length > 0
+        ? Math.lcm(...activeTracks.map(t => t.steps))
+        : Math.lcm(...section.tracks.map(t => t.steps))
+      for (let rep = 1; rep <= section.repeat; rep++) {
+        stepOffset += globalSteps
+        const isLast = si === sections.length - 1 && rep === section.repeat
+        if (!isLast) {
+          // Place just before the next rep/section's events so note-offs are already dispatched
+          events.push({ timeMs: stepOffset * stepMs - 0.001, seqEnd: true })
+        }
       }
     }
   }
@@ -632,27 +726,72 @@ async function main() {
     ? 'MV-1 START/STOP to play/pause  —  ESC to exit'
     : 'ESC to stop  —  ◀▶ bars  ▲▼ sections'
 
-  // Create shared control buffer
-  const controlBuffer = new SharedArrayBuffer(12)
+  // Create shared control buffer: [0]=signal [1]=muteMask [2]=seekDelta [3]=seqBoundarySteps
+  const controlBuffer = new SharedArrayBuffer(16)
   const control = new Int32Array(controlBuffer)
 
   // Initialize screen
   const tracks = sections[0].tracks
   const screen = new PlayerScreen()
+
+  // Apply initial mute state from song.yml (tracks marked false start muted)
+  const initialMuteMask = tracks.reduce((mask, t) =>
+    isTrackActive(t, trackState, hasExplicitTracks) ? mask : mask | (1 << t.channel), 0)
+  Atomics.store(control, 1, initialMuteMask)
+
   screen.init(tracks, control)
   screen.drawConnection(portName, stopHint)
   screen.drawTitle(title, bpm)
   screen.drawTracks()
+
+  const computeAdjacentSections = (delta: number, fromKey?: string): SectionDef[] | null => {
+    if (!isDir) return null
+    try {
+      const baseKey = fromKey ?? sections[0].key
+      if (cli.seq) {
+        const seqNum = parseInt(baseKey, 10) + delta
+        if (isNaN(seqNum)) return null
+        const nextSource = join(resolved, 'sequences', String(seqNum))
+        try { statSync(nextSource) } catch { return null }
+        const tracks = loadSequence(nextSource)
+        return [{ name: `seq ${seqNum}`, key: String(seqNum), tracks, repeat: 1, source: nextSource }]
+      }
+      const { raw } = loadSongMeta(resolved)
+      const { sectionDefs, index } = loadSectionDefs(resolved, raw)
+      const sortedKeys = Object.keys(sectionDefs).sort()
+      const currentIdx = sortedKeys.indexOf(baseKey)
+      if (currentIdx < 0) return null
+      const nextKey = sortedKeys[currentIdx + delta]
+      if (!nextKey) return null
+      return buildSections(sectionDefs, [nextKey], resolved, index)
+    } catch { return null }
+  }
+
   screen.onSectionSeek = (delta: number) => {
-    if (!displayInfo || sectionStarts.length === 0) return
-    const currentStep = displayInfo.totalStep
-    let targetIdx = sectionStarts.findIndex(s => s.step > currentStep) - 1
-    if (targetIdx < 0) targetIdx = sectionStarts.length - 1
-    const nextIdx = Math.max(0, Math.min(sectionStarts.length - 1, targetIdx + delta))
-    const seekDelta = sectionStarts[nextIdx].step - currentStep
-    if (seekDelta !== 0) {
-      Atomics.add(control, 2, seekDelta)
-      Atomics.notify(control, 0)
+    if (shouldLoop) {
+      // Loop mode: scroll through sections; commit whichever is pending at cycle end
+      if (reloadPending) return
+      const fromKey = pendingSectionNav ? pendingSectionNav[0].key : sections[0].key
+      const next = computeAdjacentSections(delta, fromKey)
+      if (!next) return
+      pendingSectionNav = next
+      screen.drawMessage(`  ${chalk.cyan('→')}  ${next[0].name}`)
+      if (workerActive) {
+        Atomics.store(control, 0, 3)
+        Atomics.notify(control, 0)
+      }
+    } else {
+      // Song mode: immediate seek within flat arrangement
+      if (!displayInfo || sectionStarts.length === 0) return
+      const currentStep = displayInfo.totalStep
+      let targetIdx = sectionStarts.findIndex(s => s.step > currentStep) - 1
+      if (targetIdx < 0) targetIdx = sectionStarts.length - 1
+      const nextIdx = Math.max(0, Math.min(sectionStarts.length - 1, targetIdx + delta))
+      const seekDelta = sectionStarts[nextIdx].step - currentStep
+      if (seekDelta !== 0) {
+        Atomics.add(control, 2, seekDelta)
+        Atomics.notify(control, 0)
+      }
     }
   }
 
@@ -675,6 +814,8 @@ async function main() {
   let displayInfo: DisplayInfo | null = null
   let workerActive = false
   let reloading = false
+  let reloadPending = false
+  let pendingSectionNav: SectionDef[] | null = null
   let exiting = false
   let startTrigger: (() => void) | null = null
   let alsaProc: ChildProcess | null = null
@@ -698,9 +839,69 @@ async function main() {
       reloading = false
     } else if (msg.type === 'restarting') {
       // Worker reached cycle end and is restarting with new schedule
-      screen.clearMessage()
-      currentSectionName = ''
-      reloading = false
+      if (pendingSectionNav !== null) {
+        const next = pendingSectionNav
+        pendingSectionNav = null
+        sections = next
+        const navMuteMask = sections[0].tracks.reduce((mask, t) =>
+          isTrackActive(t, trackState, hasExplicitTracks) ? mask : mask | (1 << t.channel), 0)
+        Atomics.store(control, 1, navMuteMask)
+        const { schedule, loopMs, sectionStarts: newSectionStarts } = buildSchedule(sections, bpm, trackState, hasExplicitTracks, cli.clock && !effectiveWait, gmMode)
+        sectionStarts = newSectionStarts
+        reloading = true
+        worker.postMessage({ type: 'reload', schedule, loopMs, loop: shouldLoop && !effectiveWait, noClock: !cli.clock || effectiveWait, stepMs: 60000 / (bpm * 4) })
+        screen.clearMessage()
+        currentSectionName = ''
+      } else if (reloadPending) {
+        reloadPending = false
+        try {
+          // Full reload: re-read song.yml
+          if (songFile && existsSync(songFile)) {
+            const raw = parseYaml(readFileSync(songFile, 'utf-8')) as Record<string, unknown>
+            const meta = raw.meta as { bpm?: number } | undefined
+            if (meta?.bpm) bpm = meta.bpm
+            hasExplicitTracks = raw.tracks !== undefined
+            trackState = (raw.tracks as Record<string, boolean> | undefined) ?? {}
+          }
+          // Re-read section definitions/sequences — stay on the currently playing section
+          if (isDir) {
+            if (cli.seq) {
+              // In seq mode, keep the section the user navigated to (not the initial cli.seq)
+              const currentKey = sections[0].key
+              const source = join(resolved, 'sequences', currentKey)
+              const tracks = loadSequence(source)
+              sections = [{ name: sections[0].name, key: currentKey, tracks, repeat: sections[0].repeat, source }]
+            } else {
+              const { raw } = loadSongMeta(resolved)
+              const { sectionDefs, index } = loadSectionDefs(resolved, raw)
+              if (shouldLoop) {
+                // In section-filter mode, stay on the currently playing section
+                sections = buildSections(sectionDefs, [sections[0].key], resolved, index)
+              } else {
+                // In full-song mode, rebuild the whole arrangement
+                const arrangement = (raw.arrangement as (string | number)[]).map(String)
+                sections = buildSections(sectionDefs, arrangement, resolved, index, cli.section)
+              }
+            }
+          }
+        } catch (err) {
+          screen.drawMessage(`  ${chalk.red('✕')}  Reload failed: ${err instanceof Error ? err.message : String(err)}`)
+        }
+        // Reset mute state from freshly loaded trackState
+        const reloadMuteMask = sections[0].tracks.reduce((mask, t) =>
+          isTrackActive(t, trackState, hasExplicitTracks) ? mask : mask | (1 << t.channel), 0)
+        Atomics.store(control, 1, reloadMuteMask)
+        const { schedule, loopMs, sectionStarts: newSectionStarts } = buildSchedule(sections, bpm, trackState, hasExplicitTracks, cli.clock && !effectiveWait, gmMode)
+        sectionStarts = newSectionStarts
+        reloading = true
+        worker.postMessage({ type: 'reload', schedule, loopMs, loop: shouldLoop && !effectiveWait, noClock: !cli.clock || effectiveWait, stepMs: 60000 / (bpm * 4) })
+        screen.clearMessage()
+        currentSectionName = ''
+      } else {
+        screen.clearMessage()
+        currentSectionName = ''
+        reloading = false
+      }
     } else if (msg.type === 'done') {
       // Worker has sent allNotesOff and closed port — safe to exit
       workerActive = false
@@ -716,31 +917,9 @@ async function main() {
   let reloadTimer: ReturnType<typeof setTimeout> | null = null
   const triggerReload = () => {
     if (exiting) return
-    try {
-      // Full reload: re-read song.yml
-      if (songFile && existsSync(songFile)) {
-        const raw = parseYaml(readFileSync(songFile, 'utf-8')) as Record<string, unknown>
-        const meta = raw.meta as { bpm?: number } | undefined
-        if (meta?.bpm) bpm = meta.bpm
-        hasExplicitTracks = raw.tracks !== undefined
-        trackState = (raw.tracks as Record<string, boolean> | undefined) ?? {}
-      }
-      // Re-read section definitions and sequences
-      if (isDir) {
-        const { raw } = loadSongMeta(resolved)
-        const { sectionDefs, index } = loadSectionDefs(resolved, raw)
-        const arrangement = (raw.arrangement as (string | number)[]).map(String)
-        sections = buildSections(sectionDefs, arrangement, resolved, index)
-      }
-    } catch { return }
-
     screen.drawMessage(`  ${chalk.yellow('↻')}  Change detected, restarting at cycle end…`)
-
+    reloadPending = true
     if (workerActive) {
-      const { schedule, loopMs, sectionStarts: newSectionStarts } = buildSchedule(sections, bpm, trackState, hasExplicitTracks, cli.clock && !effectiveWait, gmMode)
-      sectionStarts = newSectionStarts
-      reloading = true
-      worker.postMessage({ type: 'reload', schedule, loopMs, loop: shouldLoop && !effectiveWait, noClock: !cli.clock || effectiveWait, stepMs: 60000 / (bpm * 4) })
       Atomics.store(control, 0, 3)
       Atomics.notify(control, 0)
     }
@@ -748,26 +927,29 @@ async function main() {
 
   const watchers: FSWatcher[] = []
   if (cli.watch && isDir) {
-    // Recursively collect all .yml files in the song directory
-    const collectYamlFiles = (dir: string): string[] => {
-      const files: string[] = []
+    // Recursively collect all directories in the song directory (excluding hidden folders)
+    const collectDirs = (dir: string): string[] => {
+      const dirs: string[] = [dir]
       try {
         for (const f of readdirSync(dir)) {
+          if (f.startsWith('.')) continue
           const full = join(dir, f)
           if (statSync(full).isDirectory()) {
-            files.push(...collectYamlFiles(full))
-          } else if (f.endsWith('.yml') || f.endsWith('.yaml')) {
-            files.push(full)
+            dirs.push(...collectDirs(full))
           }
         }
       } catch {}
-      return files
+      return dirs
     }
-    for (const f of collectYamlFiles(resolved)) {
-      watchers.push(watch(f, () => {
-        if (reloadTimer) clearTimeout(reloadTimer)
-        reloadTimer = setTimeout(triggerReload, 100)
-      }))
+    for (const d of collectDirs(resolved)) {
+      try {
+        watchers.push(watch(d, (eventType, filename) => {
+          if (!filename || filename.endsWith('.yml') || filename.endsWith('.yaml')) {
+            if (reloadTimer) clearTimeout(reloadTimer)
+            reloadTimer = setTimeout(triggerReload, 100)
+          }
+        }))
+      } catch {}
     }
   }
 
@@ -821,6 +1003,10 @@ async function main() {
       if (exiting) break
     }
 
+    if (pendingSectionNav !== null) {
+      sections = pendingSectionNav
+      pendingSectionNav = null
+    }
     const { schedule, loopMs, sectionStarts: newSectionStarts } = buildSchedule(sections, bpm, trackState, hasExplicitTracks, cli.clock && !effectiveWait, gmMode)
     sectionStarts = newSectionStarts
     workerActive = true

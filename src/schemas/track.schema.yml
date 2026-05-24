@@ -57,7 +57,7 @@ oneOf:
     additionalProperties:
       type: string
       description: 'Step pattern (1-128 steps) — uses velocity_maps. Spaces and | ignored. Characters not in velocity_maps are treated as rest. Known names: kick, snare, hihat, open_hihat, rimshot, clap, crash, ride, low_tom, mid_tom, high_tom'
-  - title: 'Melodic track'
+  - title: 'Melodic track (notes)'
     type: object
     required: [notes]
     additionalProperties: false
@@ -129,3 +129,70 @@ oneOf:
               maximum: 5
               default: 1
               description: 'Start Time Adjustment (0-5 clocks within a step), matches MV-1 timing at 24 PPQN (default: 1)'
+  - title: 'Melodic track (roll)'
+    description: 'Piano-roll notation — each item maps a note name to a step pattern string. Each char = 1 step; | and spaces are visual separators ignored during parsing.'
+    type: object
+    required: [roll]
+    additionalProperties: false
+    properties:
+      track:
+        type: integer
+        minimum: 1
+        maximum: 16
+      clip:
+        type: integer
+        minimum: 1
+        maximum: 16
+      sound:
+        type: string
+      category:
+        type: string
+      steps:
+        type: integer
+        minimum: 1
+        maximum: 128
+        description: 'Override loop length in steps (default: auto-detected from pattern length)'
+      transpose:
+        type: integer
+        minimum: -127
+        maximum: 127
+      custom:
+        type: object
+        description: 'Character to velocity (and optional sta) mapping. Value: integer, "vel(sta)" string, or {vel, sta} object.'
+        propertyNames:
+          pattern: '^[^\\s|.=]$'
+          maxLength: 1
+        additionalProperties:
+          oneOf:
+            - type: integer
+              minimum: 0
+              maximum: 127
+              description: 'Velocity (sta defaults to 0)'
+            - type: string
+              pattern: '^\d+(\(\d+\))?$'
+              description: 'Velocity with optional sta: "80" or "80(2)" (vel=80 sta=2)'
+            - type: object
+              required: [vel]
+              additionalProperties: false
+              properties:
+                vel:
+                  type: integer
+                  minimum: 0
+                  maximum: 127
+                sta:
+                  type: integer
+                  minimum: 0
+                  maximum: 5
+      roll:
+        type: array
+        description: 'Ordered list of note/chord rows. Each item: {NOTE_OR_CHORD: PATTERN}. Note names (C2, G#3) are used directly; other keys are resolved as chord aliases from chords.yml.'
+        items:
+          type: object
+          minProperties: 1
+          maxProperties: 1
+          propertyNames:
+            pattern: '^[A-Za-z][A-Za-z0-9#b_-]*$'
+            description: 'Note name (e.g. C2, G#3, Bb4) or chord alias (e.g. Am9, Fmaj7)'
+          additionalProperties:
+            type: string
+            description: 'Step pattern — each non-separator char is 1 step. Velocity_map chars = note-on, = = sustain, . = rest, | and spaces = visual separators.'
