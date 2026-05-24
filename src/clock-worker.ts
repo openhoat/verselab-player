@@ -155,21 +155,29 @@ function runLoop(schedule: ScheduledEvent[], loopMs: number, loop: boolean, step
 }
 
 const CLOCKS_PER_STEP = 6
-const CLOCK_PREROLL_BARS = 2
+const STEPS_PER_BAR = 16
 
 let clockPrerollDone = false
 
-function clockPreroll(stepMs: number) {
+function clockPreroll(stepMs: number, bars: number) {
   const clockMs = stepMs / CLOCKS_PER_STEP
-  const totalClocks = CLOCK_PREROLL_BARS * 16 * CLOCKS_PER_STEP
+  const clocksPerBeat = 4 * CLOCKS_PER_STEP
+  const totalClocks = bars * STEPS_PER_BAR * CLOCKS_PER_STEP
   const start = performance.now()
   for (let c = 0; c < totalClocks; c++) {
+    if (c % clocksPerBeat === 0) {
+      const beatIndex = Math.floor(c / clocksPerBeat)
+      const bar = Math.floor(beatIndex / 4) + 1
+      const beat = (beatIndex % 4) + 1
+      parentPort!.postMessage({ type: 'preroll', bar, beat, totalBars: bars })
+    }
     const target = start + c * clockMs
     while (performance.now() < target) { /* spin */ }
     sendClock([0xF8])
   }
   sendClock([0xFA])
   clockPrerollDone = true
+  parentPort!.postMessage({ type: 'preroll-done' })
 }
 
 function closeClockPorts() {
@@ -208,11 +216,13 @@ function play(schedule: ScheduledEvent[], loopMs: number, loop: boolean, noClock
 }
 
 type WorkerInboundMessage =
-  | { type: 'start'; portIndex: number; clockPortIndices?: number[]; schedule: ScheduledEvent[]; loopMs: number; loop?: boolean; noClock?: boolean; stepMs?: number; startDelayMs?: number }
+  | { type: 'start'; portIndex: number; clockPortIndices?: number[]; prerollBars?: number; schedule: ScheduledEvent[]; loopMs: number; loop?: boolean; noClock?: boolean; stepMs?: number; startDelayMs?: number }
   | { type: 'reload'; schedule: ScheduledEvent[]; loopMs: number; loop?: boolean; noClock?: boolean; stepMs?: number }
 
 export type WorkerOutboundMessage =
   | { type: 'display'; info: DisplayInfo }
+  | { type: 'preroll'; bar: number; beat: number; totalBars: number }
+  | { type: 'preroll-done' }
   | { type: 'done' }
   | { type: 'restarting' }
   | { type: 'stopped' }
@@ -225,8 +235,8 @@ parentPort!.on('message', (msg: WorkerInboundMessage) => {
       co.openPort(idx)
       clockOuts.push(co)
     }
-    if (clockOuts.length > 0 && msg.stepMs) {
-      clockPreroll(msg.stepMs)
+    if (clockOuts.length > 0 && msg.prerollBars && msg.stepMs) {
+      clockPreroll(msg.stepMs, msg.prerollBars)
     }
     play(msg.schedule, msg.loopMs, msg.loop ?? true, msg.noClock ?? false, msg.stepMs ?? 0, msg.startDelayMs ?? 0)
   } else if (msg.type === 'reload') {
